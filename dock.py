@@ -13,14 +13,14 @@ import win32process  # 新增导入
 # 添加获取任务栏固定程序所需的库
 import winreg
 import pythoncom
-from win32com.shell import shell, shellcon
+from win32com.shell import shell, shellcon # type: ignore
 import shutil
 
 class WallpaperWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.wallpaper_path = ""  # 在调用setup_window之前初始化此属性
         self.setup_window()
-        self.wallpaper_path = ""
         self.load_wallpaper()
         
     def setup_window(self):
