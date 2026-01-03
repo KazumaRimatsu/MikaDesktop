@@ -24,10 +24,7 @@ def compose_on_template(image_data: Union[bytes, str, Image.Image],
 	"""
 	# 转为 PIL
 	src = _to_pil(image_data)
-	# 先将图像放大到128x128（放大一倍以保留更多细节），然后再缩放到目标尺寸
-	src = src.resize((128, 128), Image.LANCZOS)
-	if src.size != size:
-		src = src.resize(size, Image.LANCZOS)
+	src = src.resize((128,128), Image.LANCZOS)
 
 	# 模板路径
 	if template_path is None:

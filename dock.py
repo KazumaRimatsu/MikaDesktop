@@ -24,6 +24,7 @@ class WallpaperWindow(QMainWindow):
         self.load_wallpaper()
         
     def setup_window(self):
+        self.setWindowTitle("Wallpaper")
         # 设置全屏无标题栏窗口
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
@@ -269,7 +270,7 @@ class DockApp(QMainWindow):
         """设置定时器来监控进程状态"""
         self.process_timer = QTimer()
         self.process_timer.timeout.connect(self.check_running_processes)
-        self.process_timer.start(1200)  # 每2秒检查一次
+        self.process_timer.start(1200)
 
     def is_process_running(self, app_path):
         """检查指定路径的应用是否正在运行 - 仅当有可见窗口时"""
@@ -643,7 +644,7 @@ class DockApp(QMainWindow):
             pass
 
     def init_ui(self):
-        self.setWindowTitle("应用栏")
+        self.setWindowTitle("Dock")
         # 修改窗口标志，使用Qt.Tool标志防止被其他窗口遮挡
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
