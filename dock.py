@@ -6,69 +6,14 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QCursor, QAction, QPalette
 from PySide6.QtCore import Qt, QSize, QTimer, QRect, QPropertyAnimation, QEasingCurve
 from MakeAppIcon import compose_on_template
+from Wallpaper import WallpaperWindow
 import win32con
 import win32gui
 import psutil  # 添加进程监控库
 import win32process  # 新增导入
 # 添加获取任务栏固定程序所需的库
-import winreg
 import pythoncom
 from win32com.shell import shell, shellcon # type: ignore
-import shutil
-
-class WallpaperWindow(QMainWindow):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.wallpaper_path = ""  # 在调用setup_window之前初始化此属性
-        self.setup_window()
-        self.load_wallpaper()
-        
-    def setup_window(self):
-        self.setWindowTitle("Wallpaper")
-        # 设置全屏无标题栏窗口
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self.showFullScreen()
-        # 确保壁纸窗口在其他窗口之下
-        self.lower()
-        
-    def load_wallpaper(self):
-        settings_file = os.path.abspath("apps.json")
-        if os.path.exists(settings_file):
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                try:
-                    settings = json.load(f)
-                    self.wallpaper_path = settings.get('wallpaper', "")
-                except json.JSONDecodeError:
-                    self.wallpaper_path = ""
-        
-        if self.wallpaper_path and os.path.exists(self.wallpaper_path):
-            self.set_wallpaper(self.wallpaper_path)
-        else:
-            # 默认使用纯色背景
-            self.setStyleSheet("background-color: #36393F;")
-    
-    def set_wallpaper(self, image_path):
-        self.wallpaper_path = image_path
-        palette = QPalette()
-        pixmap = QPixmap(image_path)
-        if not pixmap.isNull():
-            # 调整图片大小以适应窗口
-            scaled_pixmap = pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            palette.setBrush(QPalette.Window, scaled_pixmap)
-            self.setPalette(palette)
-        else:
-            # 如果图片加载失败，使用默认背景色
-            self.setStyleSheet("background-color: #36393F;")
-    
-    def resizeEvent(self, event):
-        # 窗口大小改变时重新设置壁纸
-        if self.wallpaper_path and os.path.exists(self.wallpaper_path):
-            self.set_wallpaper(self.wallpaper_path)
-        super().resizeEvent(event)
-
-    def closeEvent(self, event):
-        pass
 
 class DockApp(QMainWindow):
     def __init__(self):
@@ -136,88 +81,6 @@ class DockApp(QMainWindow):
             
         return pinned_apps
 
-    def get_pinned_apps_from_startmenu(self):
-        """从开始菜单获取固定的应用程序 - 保留此函数以防需要回退"""
-        # 注释掉原来的实现，因为我们现在只关注任务栏固定的应用
-        pinned_apps = []
-        try:
-            # 获取开始菜单路径
-            start_menu_path = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
-            start_menu_common_path = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
-            
-            # 检查常用位置
-            possible_paths = [
-                os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar'),
-                os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'),
-                os.path.join(os.getenv('PROGRAMDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
-            ]
-            
-            # 使用COM接口获取固定应用（更可靠的方法）
-            pythoncom.CoInitialize()
-            try:
-                # 获取Shell Application对象
-                shell_app = pythoncom.CoCreateInstance(
-                    shell.CLSID_ShellApplication, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellDispatch4
-                )
-                
-                # 获取任务栏固定的应用
-                pinned_items = []
-                # 获取开始菜单对象
-                start_menu = shell.SHGetDesktopFolder()
-                # 查找固定应用项
-                desktop_path = shell.SHGetFolderPath(0, shellcon.CSIDL_DESKTOP, 0, 0)
-                desktop_folder = start_menu.BindToObject(shell.SHGetIDListFromPath(desktop_path), None, shell.IID_IShellFolder)
-                
-                # 从用户配置中获取固定应用（Windows 10/11）
-                pinned_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar')
-                if os.path.exists(pinned_dir):
-                    for item in os.listdir(pinned_dir):
-                        if item.endswith('.lnk'):
-                            shortcut_path = os.path.join(pinned_dir, item)
-                            app_info = self.get_app_info_from_shortcut(shortcut_path)
-                            if app_info:
-                                # 检查是否已存在，避免重复
-                                if not any(app['name'] == app_info['name'] for app in pinned_apps):
-                                    pinned_apps.append(app_info)
-            except Exception as e:
-                print(f"使用COM接口获取固定应用失败: {e}")
-                # 回退到其他方法
-                pass
-            finally:
-                pythoncom.CoUninitialize()
-            
-            # 方法2: 检查开始菜单中的"固定"文件夹
-            if not pinned_apps:
-                # 尝试通过Windows API获取开始菜单固定应用
-                pinned_folder_path = os.path.join(os.getenv('LOCALAPPDATA'), 'Microsoft', 'Windows', 'Shell', 'Packages', 'Microsoft.Windows.StartMenu_cw5n1h2txyewy', 'StartMenuLayout')
-                if not os.path.exists(pinned_folder_path):
-                    # 尝试其他可能的路径
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            for item in os.listdir(path):
-                                item_path = os.path.join(path, item)
-                                if item.endswith('.lnk'):
-                                    app_info = self.get_app_info_from_shortcut(item_path)
-                                    if app_info:
-                                        if not any(app['name'] == app_info['name'] for app in pinned_apps):
-                                            pinned_apps.append(app_info)
-                                elif os.path.isdir(item_path):
-                                    # 检查子文件夹
-                                    for sub_item in os.listdir(item_path):
-                                        sub_item_path = os.path.join(item_path, sub_item)
-                                        if sub_item.endswith('.lnk'):
-                                            app_info = self.get_app_info_from_shortcut(sub_item_path)
-                                            if app_info:
-                                                if not any(app['name'] == app_info['name'] for app in pinned_apps):
-                                                    pinned_apps.append(app_info)
-        
-        except Exception as e:
-            print(f"获取开始菜单固定应用失败: {e}")
-            # 如果无法获取固定应用，则返回空列表
-            return []
-            
-        return pinned_apps
-
     def get_app_info_from_shortcut(self, shortcut_path):
         """从快捷方式获取应用信息"""
         try:
@@ -235,10 +98,6 @@ class DockApp(QMainWindow):
             if not target_path or not os.path.exists(target_path):
                 return None
                 
-            # 获取工作目录和参数
-            # work_dir = shortcut.GetWorkingDirectory()
-            # arguments = shortcut.GetArguments()
-            
             # 获取应用名称（从快捷方式名称或可执行文件名）
             app_name = os.path.splitext(os.path.basename(shortcut_path))[0]
             if not app_name:
@@ -292,11 +151,9 @@ class DockApp(QMainWindow):
                         # 比较路径是否匹配
                         if os.path.abspath(proc_path).lower() == normalized_app_path:
                             # 检查是否为系统服务或程序本身
-                            process_name = proc.name().lower()
-                            
-                            # 过滤系统服务（如ShellExperienceHost等）
                             
                             # 检查是否为系统服务
+                            process_name = proc.name().lower()
                             if process_name in self.system_processes:
                                 return True  # 继续遍历，但不添加到结果中
                             
@@ -384,6 +241,11 @@ class DockApp(QMainWindow):
                                                 if process_name == current_process_name:
                                                     return True  # 跳过这个进程
                                                 
+                                                # 检查是否为输入法候选词窗口等特殊窗口
+                                                class_name = win32gui.GetClassName(hwnd)
+                                                if class_name in ["MSCTFIME UI", "IAIMETIPWndClass", "TIPBand", "Candidate"]:
+                                                    return True  # 跳过输入法相关窗口
+                                                
                                                 has_visible_window = True
                                                 return False  # 找到窗口，停止遍历
                                     except:
@@ -452,21 +314,13 @@ class DockApp(QMainWindow):
                 if app_name not in current_running:
                     apps_to_update.add(app_name)
             
-            # 更新固定应用按钮
+            # 更新所有类型的应用按钮
             for app_name in apps_to_update:
-                if app_name in self.pinned_app_buttons:
-                    button = self.pinned_app_buttons[app_name]
+                button = self.get_app_button(app_name)
+                if button:
                     is_running = app_name in current_running
                     self.set_button_style(button, is_running)
-                    print(f"固定应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
-            
-            # 更新用户添加的应用按钮
-            for app_name in apps_to_update:
-                if app_name in self.app_buttons:
-                    button = self.app_buttons[app_name]
-                    is_running = app_name in current_running
-                    self.set_button_style(button, is_running)
-                    print(f"用户应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
+                    print(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
             
             # 更新运行中应用按钮
             for app_info in self.running_apps_list:
@@ -491,7 +345,7 @@ class DockApp(QMainWindow):
         app_path = app_data['path']
         
         # 检查应用是否正在运行
-        if app_name in self.running_apps:
+        if app_name in self.running_apps or self.is_process_running(app_path):
             # 如果正在运行，激活窗口
             self.activate_window(app_path)
         else:
@@ -499,11 +353,8 @@ class DockApp(QMainWindow):
             try:
                 # 启动前立即更新状态（避免启动延迟导致的显示问题）
                 self.running_apps[app_name] = app_path
-                if app_name in self.app_buttons:
-                    button = self.app_buttons[app_name]
-                    self.set_button_style(button, True)
-                elif app_name in self.pinned_app_buttons:
-                    button = self.pinned_app_buttons[app_name]
+                button = self.get_app_button(app_name)
+                if button:
                     self.set_button_style(button, True)
                 
                 # 启动应用
@@ -516,30 +367,20 @@ class DockApp(QMainWindow):
                 # 如果启动失败，回滚状态
                 if app_name in self.running_apps:
                     del self.running_apps[app_name]
-                if app_name in self.app_buttons:
-                    button = self.app_buttons[app_name]
-                    self.set_button_style(button, False)
-                elif app_name in self.pinned_app_buttons:
-                    button = self.pinned_app_buttons[app_name]
+                button = self.get_app_button(app_name)
+                if button:
                     self.set_button_style(button, False)
                 QMessageBox.critical(self, "错误", f"无法启动应用: {str(e)}")
 
-    def handle_running_app_click(self, app_data):
-        """处理运行中应用的点击事件 - 激活窗口或启动应用"""
-        app_path = app_data['path']
-        
-        # 检查应用是否正在运行
-        if self.is_process_running(app_path):
-            # 如果正在运行，激活窗口
-            self.activate_window(app_path)
-        else:
-            # 如果未运行，启动应用
-            try:
-                self.launch_app(app_path)
-                # 启动后更新状态
-                QTimer.singleShot(1000, self.check_running_processes)
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"无法启动应用: {str(e)}")
+    def get_app_button(self, app_name):
+        """获取指定应用名称的按钮引用，适用于所有类型的应用"""
+        if app_name in self.app_buttons:
+            return self.app_buttons[app_name]
+        elif app_name in self.pinned_app_buttons:
+            return self.pinned_app_buttons[app_name]
+        elif app_name in self.running_app_buttons:
+            return self.running_app_buttons[app_name]
+        return None
 
     def add_running_app_to_dock(self, app_data):
         """将运行中的应用添加到程序栏"""
@@ -562,20 +403,14 @@ class DockApp(QMainWindow):
                 self.running_apps_list.remove(app)
                 break
         
-        # 获取默认应用名（文件名，不带扩展名）
-        default_app_name = os.path.splitext(os.path.basename(app_data['path']))[0]
-        
-        # 弹出对话框让用户输入应用名
-        app_name, ok = QInputDialog.getText(
-            self, 
-            "输入应用名", 
-            "请输入应用名称:", 
-            text=default_app_name
-        )
-        
-        # 如果用户取消或输入为空，则使用默认名称
-        if not ok or not app_name.strip():
-            app_name = default_app_name
+        # 自动从文件路径获取应用名（快捷方式则获取快捷方式名称）
+        file_path = app_data['path']
+        if file_path.endswith('.lnk'):
+            # 如果是快捷方式，尝试获取快捷方式的实际名称
+            app_name = os.path.splitext(os.path.basename(file_path))[0]
+        else:
+            # 如果是可执行文件，使用文件名作为应用名
+            app_name = os.path.splitext(os.path.basename(file_path))[0]
         
         # 检查是否有重复的应用名，如果有则添加后缀
         counter = 1
@@ -598,56 +433,138 @@ class DockApp(QMainWindow):
         # 更新界面
         self.update_app_buttons()
 
+    def has_visible_window(self, app_path):
+        """检查应用是否有可见窗口，现在返回所有可见窗口列表"""
+        try:
+            app_filename = os.path.basename(app_path).lower()
+            
+            visible_windows = []
+            
+            def enum_windows_proc(hwnd, param):
+                if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) != '':
+                    try:
+                        # 获取窗口的进程ID
+                        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                        proc = psutil.Process(pid)
+                        
+                        # 获取进程的可执行文件路径
+                        proc_path = proc.exe().lower()
+                        normalized_app_path = os.path.abspath(app_path).lower()
+                        
+                        # 比较路径是否匹配
+                        if os.path.abspath(proc_path).lower() == normalized_app_path:
+                            # 检查是否为系统服务或程序本身
+                            process_name = proc.name().lower()
+                            
+                            # 检查是否为系统服务
+                            if process_name in self.system_processes:
+                                return True  # 继续遍历，但不添加到结果中
+                            
+                            # 检查是否为程序本身
+                            current_process_name = os.path.basename(sys.executable).lower()
+                            if process_name == current_process_name.lower():
+                                return True  # 继续遍历，但不添加到结果中
+                            
+                            # 获取窗口标题
+                            window_title = win32gui.GetWindowText(hwnd)
+                            
+                            # 窗口存在且可见，添加到结果列表
+                            param.append((hwnd, window_title))
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        pass
+                    except Exception as e:
+                        print(f"检查窗口 {hwnd} 时出错: {e}")
+                return True  # 继续遍历
+            
+            win32gui.EnumWindows(enum_windows_proc, visible_windows)
+            
+            return visible_windows
+        except Exception as e:
+            print(f"检查窗口时出错: {e}")
+            return []
+
+    def get_app_visible_windows(self, app_path):
+        """获取应用的所有可见窗口，兼容旧调用方式"""
+        return self.has_visible_window(app_path)
+
     def activate_window(self, app_path):
         """激活已运行的应用窗口"""
         app_filename = os.path.basename(app_path)
         
-        def enum_windows_proc(hwnd, param):
-            if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) != '':
-                try:
-                    # 使用 win32process 替代 win32gui
-                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                    proc = psutil.Process(pid)
-                    if proc.name().lower() == app_filename.lower():
-                        if win32gui.IsIconic(hwnd):  # 如果窗口最小化，则恢复
-                            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                            win32gui.SetWindowPos(
-                                hwnd, 
-                                win32con.HWND_TOP, 
-                                0, 0, 0, 0, 
-                                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                            )
-                        else:
-                            win32gui.SetWindowPos(
-                                hwnd, 
-                                win32con.HWND_TOP, 
-                                0, 0, 0, 0, 
-                                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                            )
-                        dock_hwnd = self.winId()
-                        if isinstance(dock_hwnd, int):
-                            win32gui.SetWindowPos(
-                                dock_hwnd, 
-                                win32con.HWND_TOPMOST, 
-                                0, 0, 0, 0, 
-                                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                            )
-                        print(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活")
-                        return False
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            return True
+        # 获取应用的所有可见窗口
+        visible_windows = self.has_visible_window(app_path)
+        
+        if visible_windows:
+            # 如果有多个窗口，激活第一个窗口
+            hwnd, title = visible_windows[0]
+            try:
+                if win32gui.IsIconic(hwnd):  # 如果窗口最小化，则恢复
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetWindowPos(
+                        hwnd, 
+                        win32con.HWND_TOP, 
+                        0, 0, 0, 0, 
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                    )
+                else:
+                    win32gui.SetWindowPos(
+                        hwnd, 
+                        win32con.HWND_TOP, 
+                        0, 0, 0, 0, 
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                    )
+                
+                # 确保Dock窗口保持在顶层
+                dock_hwnd = int(self.winId())  # 确保转换为int类型
+                win32gui.SetWindowPos(
+                    dock_hwnd, 
+                    win32con.HWND_NOTOPMOST,  # 修改：改为TOPMOST确保始终在最顶层
+                    0, 0, 0, 0, 
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                )
+                print(f"窗口 {title} 已成功激活，Dock保持在顶层")
+            except Exception as e:
+                print(f"激活窗口时出错: {e}")
+        else:
+            print(f"未找到应用 {app_path} 的可见窗口")
 
+    def activate_specific_window(self, hwnd):
+        """激活指定的窗口句柄"""
         try:
-            win32gui.EnumWindows(enum_windows_proc, 0)
+            if win32gui.IsIconic(hwnd):  # 如果窗口最小化，则恢复
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetWindowPos(
+                    hwnd, 
+                    win32con.HWND_TOP, 
+                    0, 0, 0, 0, 
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                )
+            else:
+                win32gui.SetWindowPos(
+                    hwnd, 
+                    win32con.HWND_TOP, 
+                    0, 0, 0, 0, 
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                )
+            
+            # 确保Dock窗口保持在顶层
+            dock_hwnd = int(self.winId())  # 确保转换为int类型
+            win32gui.SetWindowPos(
+                dock_hwnd, 
+                win32con.HWND_TOPMOST,  # 修改：改为TOPMOST确保始终在最顶层
+                0, 0, 0, 0, 
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+            )
+            print(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活，Dock保持在顶层")
         except Exception as e:
-            pass
+            print(f"激活窗口时出错: {e}")
 
     def init_ui(self):
         self.setWindowTitle("Dock")
         # 修改窗口标志，使用Qt.Tool标志防止被其他窗口遮挡
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_AlwaysStackOnTop)  # 确保始终在顶层
 
         # 创建中央窗口部件
         central_widget = QWidget()
@@ -893,20 +810,13 @@ class DockApp(QMainWindow):
                     QMessageBox.information(self, "提示", "该应用已在固定列表中")
                     return
             
-            # 获取默认应用名（文件名，不带扩展名）
-            default_app_name = os.path.splitext(os.path.basename(file_path))[0]
-            
-            # 弹出对话框让用户输入应用名
-            app_name, ok = QInputDialog.getText(
-                self, 
-                "输入应用名", 
-                "请输入应用名称:", 
-                text=default_app_name
-            )
-            
-            # 如果用户取消或输入为空，则使用默认名称
-            if not ok or not app_name.strip():
-                app_name = default_app_name
+            # 自动从文件路径获取应用名（快捷方式则获取快捷方式名称）
+            if file_path.endswith('.lnk'):
+                # 如果是快捷方式，尝试获取快捷方式的实际名称
+                app_name = os.path.splitext(os.path.basename(file_path))[0]
+            else:
+                # 如果是可执行文件，使用文件名作为应用名
+                app_name = os.path.splitext(os.path.basename(file_path))[0]
             
             # 检查是否有重复的应用名，如果有则添加后缀
             counter = 1
@@ -1086,7 +996,7 @@ class DockApp(QMainWindow):
             self.set_button_style(button, is_running)
             
             # 绑定点击事件 - 激活窗口或启动应用
-            button.clicked.connect(lambda checked, app_data=app: self.handle_running_app_click(app_data))
+            button.clicked.connect(lambda checked, app_data=app: self.handle_app_click(app_data))
             
             # 绑定右键菜单
             button.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1139,27 +1049,67 @@ class DockApp(QMainWindow):
 
     def update_app_button_styles(self):
         """更新所有应用按钮的样式"""
-        # 更新固定应用按钮
-        for app in self.pinned_apps:
-            app_name = app['name']
-            if app_name in self.pinned_app_buttons:
-                button = self.pinned_app_buttons[app_name]
-                is_running = app_name in self.running_apps
-                self.set_button_style(button, is_running)
+        # 统一处理所有类型的应用
+        all_apps_with_containers = [
+            (self.pinned_apps, self.pinned_app_buttons),
+            (self.apps, self.app_buttons),
+            (self.running_apps_list, self.running_app_buttons)
+        ]
         
-        # 更新用户添加的应用按钮
-        for app in self.apps:
-            app_name = app['name']
-            if app_name in self.app_buttons:
-                button = self.app_buttons[app_name]
-                is_running = app_name in self.running_apps
-                self.set_button_style(button, is_running)
+        for app_list, button_dict in all_apps_with_containers:
+            for app in app_list:
+                app_name = app['name']
+                if app_name in button_dict:
+                    button = button_dict[app_name]
+                    # 根据应用类型检查运行状态
+                    if app_list == self.running_apps_list:
+                        # 对于运行中应用，检查实际进程状态
+                        is_running = self.is_process_running(app['path'])
+                    else:
+                        # 对于其他应用，检查是否在运行列表中
+                        is_running = app_name in self.running_apps
+                    self.set_button_style(button, is_running)
 
     def launch_app(self, path):
         try:
             os.startfile(path)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法启动应用: {str(e)}")
+
+    def terminate_app_process(self, app_data):
+        """终止应用进程"""
+        app_path = app_data['path']
+        app_filename = os.path.basename(app_path)
+        
+        try:
+            # 遍历所有进程，找到匹配的应用进程并终止
+            for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                try:
+                    process_info = proc.info
+                    if process_info['exe'] and os.path.abspath(process_info['exe']) == os.path.abspath(app_path):
+                        # 检查是否为系统服务
+                        process_name = process_info['name'].lower()
+                        if process_name in self.system_processes:
+                            continue  # 跳过系统服务
+                        
+                        # 检查是否为程序本身
+                        current_process_name = os.path.basename(sys.executable).lower()
+                        if process_name == current_process_name:
+                            continue  # 跳过程序自身
+                        
+                        # 终止进程
+                        proc.terminate()
+                        print(f"已终止进程: {process_info['name']} (PID: {proc.pid})")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                except Exception as e:
+                    print(f"终止进程 {proc.name()} 时出错: {e}")
+                    continue
+            
+            # 延迟检查进程状态
+            QTimer.singleShot(1000, self.check_running_processes)
+        except Exception as e:
+            print(f"终止应用进程时出错: {e}")
 
     def show_app_context_menu(self, pos, app_data):
         # 获取触发事件的按钮
@@ -1169,11 +1119,29 @@ class DockApp(QMainWindow):
         # 检查是否为运行中应用（不在用户应用列表中）
         is_running_app = any(app['path'] == app_data['path'] for app in self.running_apps_list)
         
-        # 统一判断应用是否正在运行（用于启用/禁用“关闭窗口”）
+        # 统一判断应用是否正在运行（用于启用/禁用"关闭窗口"）
         try:
             is_running = self.is_process_running(app_data.get('path', ''))
         except Exception:
             is_running = False
+        
+        # 获取应用的所有可见窗口
+        visible_windows = self.get_app_visible_windows(app_data.get('path', ''))
+
+        # 添加窗口列表分隔符
+        if is_running:
+            menu.addSeparator()
+            
+            # 添加窗口列表
+            if visible_windows:
+                for i, (hwnd, title) in enumerate(visible_windows):
+                    window_action = QAction(f"{title[:30]}{'...' if len(title) > 30 else ''}", self)
+                    window_action.triggered.connect(lambda checked, h=hwnd: self.activate_specific_window(h))
+                    menu.addAction(window_action)
+            else:
+                no_windows_action = QAction("没有可用窗口", self)
+                no_windows_action.setEnabled(False)  # 禁用此项
+                menu.addAction(no_windows_action)
         
         if is_running_app:
             # 运行中应用的右键菜单：添加到程序栏 和 应用名本身
@@ -1182,7 +1150,7 @@ class DockApp(QMainWindow):
             menu.addAction(add_to_dock_action)
             
             app_name_action = QAction(f"{app_data['name']}", self)
-            app_name_action.triggered.connect(lambda: self.handle_running_app_click(app_data))
+            app_name_action.triggered.connect(lambda: self.handle_app_click(app_data))  # 统一使用handle_app_click
             menu.addAction(app_name_action)
         elif not app_data.get('is_pinned', False):
             # 非固定应用：删除、重命名、更改图标
@@ -1203,18 +1171,30 @@ class DockApp(QMainWindow):
             launch_action.triggered.connect(lambda: self.launch_app(app_data['path']))
             menu.addAction(launch_action)
         
-        # 统一添加“关闭窗口”选项（仅在应用正在运行时可用）
-        close_action = QAction("关闭窗口", self)
-        close_action.triggered.connect(lambda: self.close_app_window(app_data))
-        close_action.setEnabled(bool(is_running))
-        menu.addAction(close_action)
+        # 添加关闭选项
+        if is_running:
+            menu.addSeparator()
+            if visible_windows:
+                # 既有可见窗口又在运行，显示两个选项
+                close_window_action = QAction("关闭窗口", self)
+                close_window_action.triggered.connect(lambda: self.close_app_window(app_data))
+                menu.addAction(close_window_action)
+                
+                close_app_action = QAction("关闭应用", self)
+                close_app_action.triggered.connect(lambda: self.terminate_app_process(app_data))
+                menu.addAction(close_app_action)
+            else:
+                # 正在运行但无可见窗口，只显示"关闭应用"
+                close_app_action = QAction("关闭应用", self)
+                close_app_action.triggered.connect(lambda: self.terminate_app_process(app_data))
+                menu.addAction(close_app_action)
         
         # 使用事件位置计算全局位置，而不是通过sender
         if sender:
-            menu.exec_(sender.mapToGlobal(pos))
+            menu.exec(sender.mapToGlobal(pos))
         else:
             # 如果sender为None，则使用鼠标当前位置
-            menu.exec_(QCursor.pos())
+            menu.exec(QCursor.pos())
 
     def close_app_window(self, app_data):
         """关闭应用窗口"""
@@ -1270,7 +1250,7 @@ class DockApp(QMainWindow):
         new_name, ok = QInputDialog.getText(
             self, 
             "修改应用名", 
-            "请输入新的应用名称:", 
+            "输入应用名称:", 
             text=current_name
         )
         
@@ -1310,32 +1290,14 @@ class DockApp(QMainWindow):
     def open_settings(self):
         """打开设置对话框"""
         dialog = SettingsDialog(self)
-        if dialog.exec_():
+        if dialog.exec():
             # 由于移除了位置设置，这里不需要更新窗口位置
             pass
 
     def create_wallpaper_window(self):
         """创建壁纸窗口，层级设置为最底层"""
-        self.wallpaper_window = WallpaperWindow()
-        # 修改窗口标志，使用正确的Qt标志使窗口在最底层
-        self.wallpaper_window.setWindowFlags(Qt.FramelessWindowHint | Qt.X11BypassWindowManagerHint)
-        # 使用Windows API设置窗口层级到桌面壁纸层
-        import ctypes
-        from ctypes import wintypes
-        
-        # 获取窗口句柄
-        hwnd = self.wallpaper_window.winId()
-        if isinstance(hwnd, int):
-            # 设置窗口层级为最低
-            win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-        
-        self.wallpaper_window.show()
-        # 确保Dock窗口在壁纸之上
-        dock_hwnd = self.winId()
-        if isinstance(dock_hwnd, int):
-            win32gui.SetWindowPos(dock_hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-        self.raise_()
-        self.show()
+        self.wallpaper_window = WallpaperWindow(image_path=self.wallpaper_path)
+        print(self.wallpaper_path)
 
     def save_settings(self):
         settings = {
@@ -1388,7 +1350,7 @@ class DockApp(QMainWindow):
         menu.addAction(restart_action)
         
         # 显示菜单
-        menu.exec_(QCursor.pos())
+        menu.exec(QCursor.pos())
 
     def restart_app(self):
         """重启应用程序"""
