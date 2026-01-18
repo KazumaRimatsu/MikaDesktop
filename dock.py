@@ -14,7 +14,7 @@ import psutil  # 添加进程监控库
 import win32process  # 新增导入
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell # type: ignore
-from process_manager import ProcessManager  # 导入新的进程管理器
+from ProcessManager import ProcessManager  # 导入新的进程管理器
 from CustomUI import IconHoverFilter, ContextPopup
 
 
