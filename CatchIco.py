@@ -113,11 +113,17 @@ class WindowsIconExtractor:
             enable_cache: 是否启用图标缓存
             cache_size: 缓存大小（最大条目数）
         """
+        # 不在这里强制抛出 ImportError，延迟报错以避免模块导入失败
+        self._missing_dependencies = []
         if not PYWIN32_AVAILABLE:
-            raise ImportError("需要安装 pywin32: pip install pywin32")
+            self._missing_dependencies.append("pywin32")
         if not PILLOW_AVAILABLE:
-            raise ImportError("需要安装 Pillow: pip install Pillow")
-        
+            self._missing_dependencies.append("Pillow")
+        if self._missing_dependencies:
+            self._dep_error = f"缺失依赖: {', '.join(self._missing_dependencies)}"
+        else:
+            self._dep_error = None
+         
         self._cache_enabled = enable_cache
         self._icon_cache = {}  # 图标缓存字典
         self._max_cache_size = cache_size
@@ -130,6 +136,11 @@ class WindowsIconExtractor:
             'appdata': os.environ.get('AppData', ''),
             'local_appdata': os.environ.get('LocalAppData', ''),
         }
+    
+    def _check_deps(self):
+        if getattr(self, '_dep_error', None):
+            return False, self._dep_error
+        return True, None
     
     # ====================== 公共API ======================
     
@@ -416,10 +427,19 @@ class WindowsIconExtractor:
         self._icon_cache[key] = icon
     
     def _extract_file_icon(self, 
-                          file_path: str, 
-                          size: int, 
-                          icon_index: int = 0) -> ExtractedIcon:
+                           file_path: str, 
+                           size: int, 
+                           icon_index: int = 0) -> ExtractedIcon:
         """从文件提取图标的内部实现"""
+        ok, err = self._check_deps()
+        if not ok:
+            return ExtractedIcon(
+                image=None,
+                raw_data=b'',
+                info=IconInfo(file_path, icon_index, size, size, 32, 'Unknown', 0),
+                success=False,
+                error=err
+            )
         try:
             # 使用 ExtractIconEx 获取图标句柄
             large_icons = []
@@ -687,6 +707,9 @@ class WindowsIconExtractor:
     
     def _hicon_to_pil(self, hicon, size: int) -> 'Image.Image':
         """将图标句柄转换为PIL图像"""
+        ok, err = self._check_deps()
+        if not ok:
+            raise RuntimeError(err)
         # 创建内存DC
         hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
         hbmp = win32ui.CreateBitmap()
