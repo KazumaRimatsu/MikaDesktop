@@ -1,22 +1,22 @@
-import sys
-import os
 import json
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QMenu, QFileDialog, QVBoxLayout, QHBoxLayout, 
-                               QMessageBox, QDialog, QLabel, QInputDialog)
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QCursor, QAction
-from PySide6.QtCore import Qt, QSize, QTimer, QRect, QPropertyAnimation, QEasingCurve, QEvent, QPoint
+import os
+import sys
 
-# from MakeAppIcon import compose_on_template  # removed duplicate processing, use ProcessManager's extractor
-from Wallpaper import WallpaperWindow
+import psutil  # 添加进程监控库
 import win32con
 import win32gui
-import psutil  # 添加进程监控库
 import win32process  # 新增导入
+from PySide6.QtCore import Qt, QSize, QTimer, QRect, QPropertyAnimation, QEasingCurve, QEvent, QPoint
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QCursor
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
+                               QMessageBox, QDialog, QLabel, QInputDialog)
 # 添加获取任务栏固定程序所需的库
-from win32com.shell import shell # type: ignore
-from ProcessManager import ProcessManager  # 导入新的进程管理器
-from CustomUI import IconHoverFilter, ContextPopup
+from win32com.shell import shell  # type: ignore
 
+from CustomUI import IconHoverFilter, ContextPopup
+from ProcessManager import ProcessManager  # 导入新的进程管理器
+# from MakeAppIcon import compose_on_template  # removed duplicate processing, use ProcessManager's extractor
+from Wallpaper import WallpaperWindow
 
 
 class DockApp(QMainWindow):
@@ -63,7 +63,7 @@ class DockApp(QMainWindow):
             key = event.key()
             modifiers = event.modifiers()
             
-            # 屏蔽常见的关闭窗口快捷键组合
+            # 屏蔽常见地关闭窗口快捷键组合
             if (
                 (modifiers == Qt.ControlModifier and key == Qt.Key_Q) or  # Ctrl+Q
                 (modifiers == Qt.ControlModifier and key == Qt.Key_W) or  # Ctrl+W
@@ -1225,19 +1225,13 @@ class DockApp(QMainWindow):
         """显示菜单"""
         # 构建动作列表
         actions = [
-            ("添加应用", self.add_application, True),
-            ("退出程序", self.exit_app, True),
-            ("重启程序", self.restart_app, True)
+            ("添加应用到程序栏", self.add_application, True),
+            ("退出", self.exit_app, True),
         ]
         
         # 创建并显示自定义弹窗
         popup = ContextPopup(actions, parent=None)
         popup.show_at_position(QCursor.pos(), None)
-
-    def restart_app(self):
-        """重启应用程序"""
-        os.system("taskkill /f /im explorer.exe")
-        os.execl(sys.executable, sys.executable, *sys.argv)
 
     def exit_app(self):
         # 重启explorer.exe
