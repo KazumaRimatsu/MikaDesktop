@@ -6,6 +6,9 @@ import win32api
 import os
 import sys
 
+import MakeAppIcon
+import hashlib
+
 
 class ProcessManager:
     def __init__(self):
@@ -273,15 +276,16 @@ class ProcessManager:
             print(f"终止应用进程时出错: {e}")
             
     def extract_icon(self, exe_path):
-        """提取图标，使用CatchIco.py中的功能"""
+        """提取图标，使用CatchIco.py中的功能并通过 MakeAppIcon.compose_on_template 生成统一风格图标"""
         try:
-            # 复用 extractor 实例，避免每次创建
+            # 使用包含路径哈希的缓存名，避免不同路径同名冲突
             cache_dir = os.path.join(os.getenv('LOCALAPPDATA') or os.path.expanduser("~"), 'AppIcon')
             os.makedirs(cache_dir, exist_ok=True)
-            icon_path = os.path.join(cache_dir, f"{os.path.splitext(os.path.basename(exe_path))[0]}.png")
+            name = os.path.splitext(os.path.basename(exe_path))[0]
+            md5 = hashlib.md5((os.path.abspath(exe_path)).encode('utf-8')).hexdigest()[:8]
+            icon_path = os.path.join(cache_dir, f"{name}_{md5}.png")
             if os.path.exists(icon_path):
                 return icon_path
-
             extractor = self._get_extractor()
             if not extractor:
                 return None
@@ -289,9 +293,18 @@ class ProcessManager:
             extracted_icon = extractor.extract_file_icon(exe_path, size=64)
             if extracted_icon.success and extracted_icon.image:
                 try:
-                    extracted_icon.image.save(icon_path)
-                    return icon_path
-                except Exception:
+                    # 优先使用合成库生成统一风格图标
+                    try:
+                        composed_bytes = MakeAppIcon.compose_on_template(extracted_icon.image)
+                        with open(icon_path, "wb") as f:
+                            f.write(composed_bytes)
+                        return icon_path
+                    except Exception:
+                        # 合成失败则回退为直接保存提取到的图像
+                        extracted_icon.image.save(icon_path)
+                        return icon_path
+                except Exception as e:
+                    print(f"保存/合成图标时出错: {e}")
                     return None
             else:
                 return None
