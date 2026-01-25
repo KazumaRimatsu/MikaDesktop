@@ -9,7 +9,7 @@ import win32process  # 新增导入
 from PySide6.QtCore import Qt, QSize, QTimer, QRect, QPropertyAnimation, QEasingCurve, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QCursor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
-                               QMessageBox, QDialog, QLabel, QInputDialog)
+                               QMessageBox, QDialog, QLabel, QInputDialog, QPlainTextEdit)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
 
@@ -1174,6 +1174,13 @@ class DockApp(QMainWindow):
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
                     self.apps = settings.get('apps', [])
+                    # 加载 ProcessManager 的排除进程设置（如存在）
+                    except_list = settings.get('except_processes', [])
+                    if except_list and hasattr(self, 'process_manager') and self.process_manager:
+                        try:
+                            self.process_manager.set_except_processes(except_list)
+                        except Exception:
+                            pass
                     # 添加壁纸路径的加载
                     wallpaper_path = settings.get('wallpaper', '')
                     if wallpaper_path:
@@ -1193,7 +1200,7 @@ class DockApp(QMainWindow):
             else:
                 self.apps = []
                 print(f"配置文件 {self.settings_file} 不存在，将使用默认设置")
-            
+
             # 确保加载设置后更新应用按钮
             self.update_app_buttons()
         except Exception as e:
@@ -1210,9 +1217,11 @@ class DockApp(QMainWindow):
         try:
             settings = {
                 'apps': self.apps,
-                'wallpaper': getattr(self, 'wallpaper_path', '')  # 保存壁纸路径
+                'wallpaper': getattr(self, 'wallpaper_path', ''),  # 保存壁纸路径
+                # 将 ProcessManager 的排除列表保存到配置
+                'except_processes': getattr(self.process_manager, 'except_processes', [])
             }
-            
+
             with open(self.settings_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
             print(f"配置已成功保存到 {self.settings_file}")
@@ -1247,37 +1256,53 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.parent = parent  # 保存父窗口引用
         self.setWindowTitle("设置")
-        self.setFixedSize(400, 400)  # 增加窗口高度以容纳新设置
-        
+        self.setFixedSize(480, 420)  # 略微增大窗口以容纳编辑区
+
         layout = QVBoxLayout()
-        
+
         # 说明文本
         info_label = QLabel("壁纸设置：")
         info_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(info_label)
-        
-        # 壁纸设置按钮
+
+        # 壁纸设置行（横向布局更紧凑）
+        wp_row = QHBoxLayout()
         self.wallpaper_button = QPushButton("选择壁纸")
         self.wallpaper_button.clicked.connect(self.select_wallpaper)
-        layout.addWidget(self.wallpaper_button)
-        
-        # 显示当前壁纸路径
+        wp_row.addWidget(self.wallpaper_button)
         self.current_wallpaper_label = QLabel("当前壁纸: 未设置")
-        layout.addWidget(self.current_wallpaper_label)
-        self.update_wallpaper_label()
-        
-        # 重置壁纸按钮
+        wp_row.addWidget(self.current_wallpaper_label, 1)
         self.reset_wallpaper_button = QPushButton("重置壁纸")
         self.reset_wallpaper_button.clicked.connect(self.reset_wallpaper)
-        layout.addWidget(self.reset_wallpaper_button)
-        
+        wp_row.addWidget(self.reset_wallpaper_button)
+        layout.addLayout(wp_row)
+        self.update_wallpaper_label()
+
+        # 分隔说明
+        layout.addSpacing(8)
+        excl_label = QLabel("进程排除列表（每行一个，若只写名称将自动补 .exe）：")
+        excl_label.setAlignment(Qt.AlignLeft)
+        layout.addWidget(excl_label)
+        # 编辑区域：每行一个进程名
+        self.except_edit = QPlainTextEdit()
+        self.except_edit.setPlaceholderText("例如：\npython.exe\nexplorer.exe\nshellexperiencehost")
+        self.except_edit.setFixedHeight(120)
+        # 初始化内容（从 ProcessManager 读取当前列表）
+        try:
+            current = getattr(self.parent.process_manager, 'except_processes', [])
+            if current:
+                self.except_edit.setPlainText("\n".join(current))
+        except Exception:
+            pass
+        layout.addWidget(self.except_edit)
+
         # 保存按钮
         save_button = QPushButton("确定")
         save_button.clicked.connect(self.accept)
         layout.addWidget(save_button)
-        
+
         self.setLayout(layout)
-        
+
         # 添加独立的样式表
         self.setStyleSheet("""
             QDialog {
@@ -1314,7 +1339,7 @@ class SettingsDialog(QDialog):
                 background-color: #2a66c8;
             }
         """)
-    
+
     def select_wallpaper(self):
         """选择壁纸图片"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1323,7 +1348,7 @@ class SettingsDialog(QDialog):
             "", 
             "图片文件 (*.png *.jpg *.jpeg *.bmp *.gif);;所有文件 (*)"
         )
-        
+
         if file_path:
             # 确保保存绝对路径
             absolute_path = os.path.abspath(file_path)
@@ -1339,7 +1364,7 @@ class SettingsDialog(QDialog):
             self.current_wallpaper_label.setText(f"当前壁纸: {os.path.basename(self.parent.wallpaper_path)}")
         else:
             self.current_wallpaper_label.setText("当前壁纸: 未设置")
-    
+
     def reset_wallpaper(self):
         """重置壁纸为默认背景"""
         self.parent.wallpaper_path = ""  # 清除壁纸路径
@@ -1347,14 +1372,22 @@ class SettingsDialog(QDialog):
         # 重置壁纸窗口为默认背景
         if self.parent.wallpaper_window:
             self.parent.wallpaper_window.setStyleSheet("background-color: #36393F;")
-    
+
     def accept(self):
         """重写accept方法以保存设置"""
-        # 保存壁纸设置到父窗口的配置文件
+        # 应用并保存排除进程列表
+        try:
+            text = self.except_edit.toPlainText()
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            if hasattr(self.parent, 'process_manager') and self.parent.process_manager:
+                self.parent.process_manager.set_except_processes(lines)
+        except Exception as e:
+            print(f"应用排除列表时出错: {e}")
+        # 保存壁纸与其它设置到父窗口的配置文件
         if hasattr(self.parent, 'wallpaper_path'):
             self.parent.save_settings()
         super().accept()
-    
+
     def save_settings(self):
         """保存设置"""
 

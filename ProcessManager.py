@@ -35,6 +35,35 @@ class ProcessManager:
         except Exception:
             return str(p).lower()
 
+    def set_except_processes(self, proc_list):
+        """
+        更新排除进程列表（用户可通过设置界面调用）。
+        规范化为小写、去重、每项尽量带 .exe（若用户只写了进程名则自动补 .exe）。
+        """
+        try:
+            if not proc_list:
+                return
+            normalized = []
+            for s in proc_list:
+                if not s:
+                    continue
+                if not isinstance(s, str):
+                    s = str(s)
+                s = s.strip().lower()
+                if not s:
+                    continue
+                # 若用户只写了名称（例如 "python"），自动补 .exe；若已有扩展名则保留
+                if '.' not in s:
+                    s = s + '.exe'
+                if s not in normalized:
+                    normalized.append(s)
+            if normalized:
+                self.except_processes = normalized
+        except Exception as e:
+            print(f"设置排除进程列表时出错: {e}")
+            # 保持原始列表不变
+            pass
+
     def _get_extractor(self):
         if self._extractor is None and self._extractor_class:
             try:
