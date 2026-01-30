@@ -20,7 +20,7 @@ class WallpaperWindow(QWidget):
             key = event.key()
             modifiers = event.modifiers()
             
-            # 屏蔽常见的关闭窗口快捷键组合
+            # 屏蔽常见的关闭窗口的快捷键组合
             if (
                 (modifiers == Qt.ControlModifier and key == Qt.Key_Q) or  # Ctrl+Q
                 (modifiers == Qt.ControlModifier and key == Qt.Key_W) or  # Ctrl+W
@@ -28,7 +28,7 @@ class WallpaperWindow(QWidget):
                 (modifiers == Qt.ControlModifier and modifiers == Qt.ShiftModifier and key == Qt.Key_W) or  # Ctrl+Shift+W
                 (key == Qt.Key_Escape)  # Escape
             ):
-                print(f"壁纸窗口阻止快捷键: {modifiers.name() if modifiers else 'No Modifiers'}+{event.text() if event.text() else key}")
+                print(f"壁纸窗口阻止快捷键: {modifiers.name() if modifiers else '无修饰键'}+{event.text() if event.text() else key}")
                 return True  # 表示事件已被处理，不再传递
         
         # 其他事件按正常流程处理

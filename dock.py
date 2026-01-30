@@ -7,14 +7,14 @@ import win32con
 import win32gui
 import win32process  # 新增导入
 from PySide6.QtCore import Qt, QSize, QTimer, QRect, QPropertyAnimation, QEasingCurve, QEvent, QPoint
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QCursor
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
                                QMessageBox, QDialog, QLabel, QInputDialog, QPlainTextEdit)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
 
-from CustomUI import IconHoverFilter, ContextPopup
-from ProcessManager import ProcessManager  # 导入新的进程管理器
+from customUI import IconHoverFilter, ContextPopup, ShutdownDialog
+from process_manager import ProcessManager  # 导入新的进程管理器
 # from MakeAppIcon import compose_on_template  # removed duplicate processing, use ProcessManager's extractor
 from Wallpaper import WallpaperWindow
 
@@ -25,8 +25,7 @@ class DockApp(QMainWindow):
         # 获取当前脚本所在目录
         global script_dir
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.settings_file = os.path.join(script_dir, "apps.json")  # 仅存储应用列表
-        self.config_file = os.path.join(script_dir, "settings.json")  # 存储其他设置
+        self.settings_file = os.path.join(script_dir, "apps.json")
         self.wallpaper_window = None  # 添加壁纸窗口引用
         self.wallpaper_path = ""  # 添加壁纸路径属性
         self.running_apps = {}  # 记录正在运行的应用
@@ -164,7 +163,7 @@ class DockApp(QMainWindow):
         self.process_timer.start(1100)
 
     def check_running_processes(self):
-        """检查所有应用的运行状态 - 改进版本，只考虑有窗口的应用"""
+        """检查所有应用的运行状态 - 只考虑有窗口的应用"""
         try:
             # 创建当前运行应用的快照
             current_running = {}
@@ -480,6 +479,9 @@ class DockApp(QMainWindow):
             }
         """)
         self.menu_button.clicked.connect(self.show_menu)
+        # 添加右键菜单支持
+        self.menu_button.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.menu_button.customContextMenuRequested.connect(self.show_menu)
         self.content_layout.addWidget(self.menu_button)
 
         # 创建固定应用按钮容器
@@ -811,7 +813,7 @@ class DockApp(QMainWindow):
             
             button = QPushButton()
             button.setFixedSize(60, 60)
-            # 启用鼠标追踪以确保 MouseMove 可用
+            # 启用鼠标追踪以确保鼠标移动事件可用
             button.setMouseTracking(True)
             
             # 设置图标（安全访问）
@@ -1230,17 +1232,62 @@ class DockApp(QMainWindow):
             import traceback
             traceback.print_exc()
 
-    def show_menu(self):
-        """显示菜单"""
+    def show_menu(self, pos):
+        """显示菜单按钮的菜单"""
         # 构建动作列表
         actions = [
+            ("终端", self.open_terminal, True),
+            ("终端管理员", self.open_terminal_admin, True),
+            ("任务管理器", self.open_task_manager, True),
+            ("电源操作", self.show_shutdown_menu, True),
             ("添加应用到程序栏", self.add_application, True),
             ("退出", self.exit_app, True),
         ]
         
-        # 创建并显示自定义弹窗
+        # 创建并显示自定义弹窗，使用菜单按钮作为锚点
         popup = ContextPopup(actions, parent=None)
-        popup.show_at_position(QCursor.pos(), self.menu_button)
+        popup.show_at_position(pos, self.sender())
+
+    def open_terminal(self):
+        """打开终端"""
+        try:
+            os.startfile("cmd.exe")
+        except Exception as e:
+            print(f"打开终端失败: {e}")
+
+    def open_terminal_admin(self):
+        """打开管理员终端"""
+        try:
+            import subprocess
+            subprocess.run(["powershell", "-Command", "Start-Process", "cmd.exe", "-Verb", "RunAs"])
+        except Exception as e:
+            print(f"打开管理员终端失败: {e}")
+
+    def open_task_manager(self):
+        """打开任务管理器"""
+        try:
+            os.startfile("taskmgr.exe")
+        except Exception as e:
+            print(f"打开任务管理器失败: {e}")
+
+    def show_shutdown_menu(self):
+        """显示关机或注销对话框"""
+        try:
+            dialog = ShutdownDialog(self)
+            if dialog.exec() == QDialog.Accepted:
+                action = dialog.selected_action
+                if action == "logout":
+                    os.system("shutdown /l")
+                elif action == "shutdown":
+                    os.system("shutdown /s /t 0")
+                elif action == "restart":
+                    os.system("shutdown /r /t 0")
+                elif action == "hibernate":
+                    os.system("rundll32.exe powrprof.dll,SetSuspendState Hibernate")
+        except Exception as e:
+            print(f"显示关机对话框失败: {e}")
+
+
 
 
     def exit_app(self):

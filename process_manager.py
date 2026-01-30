@@ -24,7 +24,7 @@ class ProcessManager:
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
         try:
-            from CatchIco import WindowsIconExtractor
+            from catchIco import WindowsIconExtractor
             # 不立即实例化过重资源，延迟在需要时创建
             self._extractor_class = WindowsIconExtractor
         except Exception:
