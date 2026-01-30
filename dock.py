@@ -1240,7 +1240,8 @@ class DockApp(QMainWindow):
         
         # 创建并显示自定义弹窗
         popup = ContextPopup(actions, parent=None)
-        popup.show_at_position(QCursor.pos(), None)
+        popup.show_at_position(QCursor.pos(), self.menu_button)
+
 
     def exit_app(self):
         # 重启explorer.exe

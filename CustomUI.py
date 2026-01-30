@@ -118,27 +118,53 @@ class ContextPopup(QWidget):
 		scroll_area.setFixedSize(content_w - 12, content_h - 12)
 		content_widget.setFixedWidth(content_w - 12)
 
-	# 重写 show_at_position: 始终在图标上方居中显示（移除屏幕检测）
+	# 重写 show_at_position: 始终优先在图标上方显示菜单，并确保显示所有选项
 	def show_at_position(self, pos, sender):
 		offset = 8  # 图标与菜单的垂直间距
 		if sender is not None:
 			try:
+				# 获取发送者（图标按钮）在屏幕上的位置和大小
 				top_left = sender.mapToGlobal(QPoint(0, 0))
 				sender_rect = QRect(top_left, sender.size())
 				center_x = sender_rect.left() + sender_rect.width() // 2
 				x = center_x - (self.width() // 2)
+				
 				# 优先放在图标上方
 				y = sender_rect.top() - self.height() - offset
-			except Exception:
+				
+				# 确保菜单在屏幕范围内
+				screen_rect = QApplication.primaryScreen().availableGeometry()
+				
+				# 水平边界检查
+				if x < screen_rect.left():
+					x = screen_rect.left()
+				elif x + self.width() > screen_rect.right():
+					x = screen_rect.right() - self.width()
+				
+				# 垂直边界检查 - 优先保证菜单显示在图标上方
+				if y < screen_rect.top():
+					# 如果上方空间不够，再尝试放到下方
+					y = sender_rect.bottom() + offset
+					# 如果下方也不够，则调整到屏幕范围内
+					if y + self.height() > screen_rect.bottom():
+						y = screen_rect.bottom() - self.height()
+					if y < screen_rect.top():
+						y = screen_rect.top()
+			except Exception as e:
+				# 如果发生错误，使用鼠标位置作为备选方案
+				print(f"ContextPopup位置计算错误: {e}")
 				global_pos = pos if isinstance(pos, QPoint) else QCursor.pos()
 				x = global_pos.x() - (self.width() // 2)
 				y = global_pos.y() - self.height() - offset
 		else:
+			# 没有发送者，使用鼠标位置
 			global_pos = pos if isinstance(pos, QPoint) else QCursor.pos()
 			x = global_pos.x() - (self.width() // 2)
 			y = global_pos.y() - self.height() - offset
 
-		self.move(int(x), int(y))
+		# 确保最终位置是整数
+		x, y = int(x), int(y)
+		self.move(x, y)
 		self.show()
 		self.raise_()
 		self.activateWindow()

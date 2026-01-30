@@ -18,7 +18,8 @@ class ProcessManager:
             'startmenuexperiencehost.exe',
             'widgets.exe',
             'widgetservice.exe',
-            'python.exe'
+            'python.exe',
+            'SystemSettings.exe'
         ]
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
@@ -149,6 +150,16 @@ class ProcessManager:
                     exe_path = process_info.get('exe')
                     if not exe_path or not os.path.exists(exe_path):
                         continue
+
+                    # 检查进程名称是否在排除列表中
+                    process_name = process_info.get('name', '').lower()
+                    if process_name in self.except_processes:
+                        continue  # 跳过排除列表中的进程
+                    
+                    # 检查是否为程序本身
+                    current_process_name = os.path.basename(sys.executable).lower()
+                    if process_name == current_process_name:
+                        continue  # 跳过程序自身
 
                     pid = process_info.get('pid')
                     windows = pid_windows.get(pid)
