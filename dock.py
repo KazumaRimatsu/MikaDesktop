@@ -13,19 +13,20 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
 
-from customUI import IconHoverFilter, ContextPopup, ShutdownDialog
+from custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
 from process_manager import ProcessManager  # 导入新的进程管理器
 # from MakeAppIcon import compose_on_template  # removed duplicate processing, use ProcessManager's extractor
-from Wallpaper import WallpaperWindow
+from wallpaper import WallpaperWindow
+from extension_window import ExtensionWindow  # 导入拓展窗口类
+
 
 
 class DockApp(QMainWindow):
     def __init__(self):
         super().__init__()
         # 获取当前脚本所在目录
-        global script_dir
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.settings_file = os.path.join(script_dir, "apps.json")
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.settings_file = os.path.join(self.script_dir, "apps.json")
         self.wallpaper_window = None  # 添加壁纸窗口引用
         self.wallpaper_path = ""  # 添加壁纸路径属性
         self.running_apps = {}  # 记录正在运行的应用
@@ -37,6 +38,8 @@ class DockApp(QMainWindow):
         self.geometry_anim = None
         # 初始化新的进程管理器
         self.process_manager = ProcessManager()
+        # 新增：拓展窗口
+        self.extension_window = None
         
         # 在初始化UI前，先初始化应用列表（修复AttributeError问题）
         self.pinned_apps = []  # 初始化固定应用列表
@@ -50,6 +53,9 @@ class DockApp(QMainWindow):
         self.update_app_buttons()
         self.create_wallpaper_window()  # 创建壁纸窗口
         self.setup_process_monitoring()  # 设置进程监控
+        
+        # 初始化拓展窗口
+        self.create_extension_window()
         
         # 添加应用程序退出事件处理器
         self.destroyed.connect(self.exit_app)
@@ -160,7 +166,7 @@ class DockApp(QMainWindow):
         """设置定时器来监控进程状态"""
         self.process_timer = QTimer()
         self.process_timer.timeout.connect(self.check_running_processes)
-        self.process_timer.start(1100)
+        self.process_timer.start(2000)  # 优化：将检查间隔从1.1秒增加到2秒，减少CPU占用
 
     def check_running_processes(self):
         """检查所有应用的运行状态 - 只考虑有窗口的应用"""
@@ -230,6 +236,8 @@ class DockApp(QMainWindow):
             
             # 更新界面
             self.update_app_buttons()
+
+            # 删除刷新拓展窗口中的托盘图标代码
 
             # 根据当前运行的应用（仅限 Dock 中的应用）调整 Dock 的层级，
             # 以避免遮挡全屏程序（例如全屏视频/浏览器）
@@ -466,17 +474,18 @@ class DockApp(QMainWindow):
         # 添加菜单按钮
         self.menu_button = QPushButton()
         self.menu_button.setFixedSize(60, 60)
-        self.menu_button.setIcon(QIcon(os.path.join(script_dir,"more.png")))
+        self.menu_button.setIcon(QIcon(os.path.join(self.script_dir,"more.png")))
         self.menu_button.setIconSize(QSize(48, 48))
         self.menu_button.setStyleSheet("""
             QPushButton {
-                border: 2px solid transparent;
-                border-radius: 10px;
-                background-color: #ECECEC;
-            }
-            QPushButton:hover {
-                background-color: #DADADA;
-            }
+                    border: 2px solid transparent;
+                    border-radius: 16px;
+                    background-color: #ECECEC;
+                }
+                QPushButton:hover {
+                    border: 2px solid #4a86e8;
+                    background-color: rgba(200, 200, 200, 100);
+                }
         """)
         self.menu_button.clicked.connect(self.show_menu)
         # 添加右键菜单支持
@@ -493,7 +502,7 @@ class DockApp(QMainWindow):
         self.pinned_app_container.setStyleSheet("""
             QWidget {
                 background-color: #ECECEC;
-                border-radius: 10px;
+                border-radius: 16px;
             }
         """)
         # 初始隐藏固定应用容器，直到有固定应用时才显示
@@ -518,7 +527,7 @@ class DockApp(QMainWindow):
         self.app_container.setStyleSheet("""
             QWidget {
                 background-color: #ECECEC;
-                border-radius: 10px;
+                border-radius: 16px;
             }
         """)
 
@@ -541,7 +550,7 @@ class DockApp(QMainWindow):
         self.running_app_container.setStyleSheet("""
             QWidget {
                 background-color: #ECECEC;
-                border-radius: 10px;
+                border-radius: 16px;
             }
         """)
 
@@ -557,17 +566,18 @@ class DockApp(QMainWindow):
         settings_layout.addStretch()  # 添加伸缩项以右对齐
         self.settings_button = QPushButton()
         self.settings_button.setFixedSize(60, 60)
-        self.settings_button.setIcon(QIcon(os.path.join(script_dir,"settings.png")))
+        self.settings_button.setIcon(QIcon(os.path.join(self.script_dir,"settings.png")))
         self.settings_button.setIconSize(QSize(48, 48))
         self.settings_button.setStyleSheet("""
             QPushButton {
-                border: 2px solid transparent;
-                border-radius: 10px;
-                background-color: #ECECEC;
-            }
-            QPushButton:hover {
-                background-color: #DADADA;
-            }
+                    border: 2px solid transparent;
+                    border-radius: 16px;
+                    background-color: #ECECEC;
+                }
+                QPushButton:hover {
+                    border: 2px solid #4a86e8;
+                    background-color: rgba(200, 200, 200, 100);
+                }
         """)
         self.settings_button.clicked.connect(self.open_settings)
         settings_layout.addWidget(self.settings_button)
@@ -582,12 +592,13 @@ class DockApp(QMainWindow):
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #ECECEC;
-                border-radius: 15px;
                 border: 1px solid rgba(0, 0, 0, 0.1);
+                border-radius: 18px;
+                
             }
             QPushButton {
                 border: none;
-                border-radius: 10px;
+                border-radius: 16px;
                 background-color: #ECECEC;
             }
             QPushButton:hover {
@@ -599,7 +610,7 @@ class DockApp(QMainWindow):
 
     def update_window_position(self):
         """更新窗口位置 - 根据应用数量自动调整宽度（使用动画平滑过渡）"""
-        screen_geometry = QApplication.primaryScreen().availableGeometry()
+        screen_geometry = QApplication.primaryScreen().geometry()
         
         # 计算所需宽度：菜单按钮 + 固定应用按钮 + 分隔符 + 用户应用按钮 + 运行应用分隔符 + 运行应用按钮 + 设置按钮 + 间距
         pinned_button_count = len(self.pinned_apps)
@@ -632,11 +643,62 @@ class DockApp(QMainWindow):
         
         window_height = 80
         
-        # 居中定位
-        x = (screen_geometry.width() - window_width) // 2
+        # 计算拓展窗口的宽度和间距
+        extension_width = 150  # 拓展窗口固定宽度
+        min_gap = 80  # 最小水平间距（主窗口右侧到拓展窗口左侧）
+        extension_spacing = max(20, min_gap)  # 保证至少为 min_gap
+        
+        # 计算总宽度（主窗口 + 间距 + 拓展窗口）
+        total_system_width = window_width + extension_spacing + extension_width
+        
+        # 计算主窗口的起始X坐标，使整个系统（主窗口+拓展窗口）居中
+        x = (screen_geometry.width() - total_system_width) // 2
         y = screen_geometry.height() - window_height - 10
         
+        # 确保 x 不为负
+        if x < 0:
+            x = 0
+        
+        # 先设定主窗口目标矩形
         target_rect = QRect(x, y, window_width, window_height)
+        
+        # 更新拓展窗口位置，使用相同的居中计算
+        if hasattr(self, 'extension_window') and self.extension_window:
+            # 计算拓展窗口的位置：主窗口右侧，保持间距
+            extension_x = x + window_width + extension_spacing
+            extension_y = y  # 与主窗口垂直对齐
+
+            # 如果超出屏幕右侧，尝试向左移动主窗口以保留 min_gap
+            overflow = (extension_x + extension_width) - screen_geometry.width()
+            if overflow > 0:
+                # 向左移动主窗口，保证不小于0
+                new_x = max(0, x - overflow)
+                # 更新主窗口目标矩形和拓展窗口X
+                target_rect = QRect(new_x, y, window_width, window_height)
+                extension_x = new_x + window_width + extension_spacing
+                x = new_x  # 供后续使用
+        
+            # 确保拓展窗口在屏幕范围内（兜底）
+            if extension_x + extension_width > screen_geometry.width():
+                extension_x = screen_geometry.width() - extension_width - 10
+        
+            # 设置拓展窗口位置
+            self.extension_window.setGeometry(extension_x, extension_y, extension_width, window_height)
+            
+            # 确保窗口层级与主窗口一致
+            if hasattr(self, 'winId') and hasattr(self.extension_window, 'winId'):
+                try:
+                    main_hwnd = int(self.winId())
+                    ext_hwnd = int(self.extension_window.winId())
+                    # 使用HWND_NOTOPMOST确保窗口层级一致
+                    win32gui.SetWindowPos(
+                        ext_hwnd,
+                        win32con.HWND_NOTOPMOST,
+                        0, 0, 0, 0,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                    )
+                except Exception as e:
+                    print(f"设置窗口层级时出错: {e}")
         
         # 如果窗口尚未显示，直接设置几何（避免首次不可见时的动画问题）
         if not self.isVisible():
@@ -961,7 +1023,7 @@ class DockApp(QMainWindow):
             button.setStyleSheet("""
                 QPushButton {
                     border: 2px solid #4a86e8;
-                    border-radius: 10px;
+                    border-radius: 16px;
                     background-color: rgba(74, 134, 232, 100);
                 }
                 QPushButton:hover {
@@ -974,7 +1036,7 @@ class DockApp(QMainWindow):
             button.setStyleSheet("""
                 QPushButton {
                     border: 2px solid transparent;
-                    border-radius: 10px;
+                    border-radius: 16px;
                     background-color: #ECECEC;
                 }
                 QPushButton:hover {
@@ -1168,6 +1230,8 @@ class DockApp(QMainWindow):
             self.wallpaper_window.show()
             # 调整层级关系，确保壁纸在最底层
             self.wallpaper_window.lower()
+            
+            # 全局快捷键管理器已移除，输入法切换功能已移至扩展窗口的图标菜单中
         print(self.wallpaper_path)
 
     def load_settings(self):
@@ -1290,10 +1354,81 @@ class DockApp(QMainWindow):
 
 
 
+    def create_extension_window(self):
+        """创建拓展窗口，与主程序坞样式和高度一致"""
+        # 创建拓展窗口实例
+        self.extension_window = ExtensionWindow(self)
+        
+        # 获取主窗口当前的几何信息
+        main_geometry = self.geometry()
+        main_x = main_geometry.x()
+        main_y = main_geometry.y()
+        main_width = main_geometry.width()
+        main_height = main_geometry.height()
+        
+        # 初始化拓展窗口位置
+        self.extension_window.initialize_position(main_x, main_y, main_width, main_height)
+        
+        # 显示拓展窗口
+        self.extension_window.show()
+        
+        # 删除显示托盘图标代码
+
+    
+    def update_extension_window_position(self, main_x, main_y, main_width, main_height):
+        """更新拓展窗口位置，使其位于主程序坞右侧，高度与主窗口一致"""
+        if hasattr(self, 'extension_window') and self.extension_window:
+            self.extension_window.update_position(main_x, main_y, main_width, main_height)
+            # 删除刷新托盘图标代码
+
+    
     def exit_app(self):
-        # 重启explorer.exe
-        os.popen("explorer")
-        sys.exit(0)
+        """清理资源并退出应用"""
+        try:
+            # 停止进程监控定时器
+            if hasattr(self, 'process_timer') and self.process_timer:
+                self.process_timer.stop()
+            
+            # 停止全局快捷键管理器
+            if hasattr(self, 'hotkey_manager') and self.hotkey_manager:
+                self.hotkey_manager.stop()
+            
+            # 停止拓展窗口
+            if hasattr(self, 'extension_window') and self.extension_window:
+                try:
+                    self.extension_window.close()
+                except Exception as e:
+                    print(f"关闭拓展窗口时出错: {e}")
+
+            
+            # 停止壁纸窗口
+            if hasattr(self, 'wallpaper_window') and self.wallpaper_window:
+                try:
+                    self.wallpaper_window.close()
+                    # 解除事件过滤器
+                    self.wallpaper_window.removeEventFilter(self.wallpaper_window)
+                except Exception as e:
+                    print(f"关闭壁纸窗口时出错: {e}")
+            
+            # 停止托盘图标
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                self.tray_icon.hide()
+                self.tray_icon = None
+            
+            # 保存设置
+            self.save_settings()
+            
+            # 重启explorer.exe
+            os.popen("explorer")
+            
+            print("应用程序已清理资源并退出")
+            sys.exit(0)
+            
+        except Exception as e:
+            print(f"退出应用时出错: {e}")
+            # 重启explorer.exe
+            os.popen("explorer")
+            sys.exit(1)
 
     def closeEvent(self, event):
         event.ignore()  # 忽略关闭事件，因为应用程序不应该真正退出
@@ -1355,7 +1490,7 @@ class SettingsDialog(QDialog):
         self.setStyleSheet("""
             QDialog {
                 background-color: #f0f0f0;
-                border-radius: 10px;
+                border-radius: 16px;
             }
             QLabel {
                 font-size: 14px;

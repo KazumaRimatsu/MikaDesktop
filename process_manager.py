@@ -24,7 +24,7 @@ class ProcessManager:
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
         try:
-            from catchIco import WindowsIconExtractor
+            from catch_ico import WindowsIconExtractor
             # 不立即实例化过重资源，延迟在需要时创建
             self._extractor_class = WindowsIconExtractor
         except Exception:
@@ -77,40 +77,36 @@ class ProcessManager:
         """检查指定路径的应用是否正在运行 - 仅当有可见窗口时"""
         try:
             normalized_app = self._norm_path(app_path)
-             # 遍历所有窗口，查找与应用路径匹配的窗口
+            current_process_name = os.path.basename(sys.executable).lower()
+            
+            # 遍历所有窗口，查找与应用路径匹配的窗口
             def enum_windows_proc(hwnd, param):
-                if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) != '':
-                    try:
-                        # 获取窗口的进程ID
-                        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                        proc = psutil.Process(pid)
-                         
-                         # 获取进程的可执行文件路径
-                        proc_path = proc.exe().lower()
-                        normalized_app_path = os.path.abspath(app_path).lower()
-                                        # 比较路径是否匹配
-                        if os.path.abspath(proc_path).lower() == normalized_app_path:
-                            proc_path = proc.exe()
-                        if proc_path and self._norm_path(proc_path) == normalized_app:
-                             # 检查是否为系统服务或程序本身
-                             
-                             # 检查是否为系统服务
-                            process_name = proc.name().lower()
-                            if process_name in self.except_processes:
-                                 return True  # 继续遍历，但不添加到结果中
-                            
-                             # 检查是否为程序本身
-                            current_process_name = os.path.basename(sys.executable).lower()
-                            if process_name == current_process_name.lower():
-                                return True  # 继续遍历，但不添加到结果中
-                            
-                            # 窗口存在且可见，且不是系统服务或程序本身，说明应用正在运行
-                            param.append(hwnd)  # 添加窗口句柄而不是布尔值
-                            return False  # 停止遍历
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                        pass
-                    except Exception as e:
-                        print(f"检查窗口 {hwnd} 时出错: {e}")
+                if not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindowText(hwnd) == '':
+                    return True  # 跳过不可见或无标题窗口
+                    
+                try:
+                    # 获取窗口的进程ID
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    proc = psutil.Process(pid)
+                    
+                    # 获取进程信息
+                    proc_path = proc.exe()
+                    process_name = proc.name().lower()
+                    
+                    # 跳过排除列表中的进程和程序本身
+                    if process_name in self.except_processes or process_name == current_process_name:
+                        return True
+                    
+                    # 比较路径是否匹配
+                    if self._norm_path(proc_path) == normalized_app:
+                        param.append(True)  # 找到匹配的窗口
+                        return False  # 停止遍历
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass  # 忽略无法访问的进程
+                except Exception as e:
+                    print(f"检查窗口 {hwnd} 时出错: {e}")
+                    
                 return True  # 继续遍历
             
             result = []
@@ -118,6 +114,7 @@ class ProcessManager:
             
             # 只有当找到对应窗口时才认为应用正在运行
             return len(result) > 0
+            
         except Exception as e:
             print(f"检查窗口时出错: {e}")
             return False
@@ -126,7 +123,7 @@ class ProcessManager:
         """获取系统中所有正在运行的进程，找出未添加但运行的应用"""
         running_processes = {}
         try:
-            # 先一次性枚举所有可见窗口，建立 pid -> visible-window-info 映射（提升性能，避免每个进程都调用 EnumWindows）
+            # 先一次性枚举所有可见窗口，建立 pid -> visible-window-info 映射（提升性能）
             pid_windows = {}
             def _collect_windows(hwnd, param):
                 try:
@@ -143,46 +140,45 @@ class ProcessManager:
             except Exception:
                 pass
 
+            # 规范化已知应用路径，避免重复检查
+            normalized_known_paths = {self._norm_path(p) for p in known_apps_paths}
+            current_process_name = os.path.basename(sys.executable).lower()
+
             # 现在遍历进程并快速判断
             for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
                 try:
                     process_info = proc.info
                     exe_path = process_info.get('exe')
+                    
+                    # 基本过滤
                     if not exe_path or not os.path.exists(exe_path):
                         continue
 
                     # 检查进程名称是否在排除列表中
                     process_name = process_info.get('name', '').lower()
-                    if process_name in self.except_processes:
-                        continue  # 跳过排除列表中的进程
-                    
-                    # 检查是否为程序本身
-                    current_process_name = os.path.basename(sys.executable).lower()
-                    if process_name == current_process_name:
-                        continue  # 跳过程序自身
+                    if process_name in self.except_processes or process_name == current_process_name:
+                        continue  # 跳过排除列表和程序自身
 
                     pid = process_info.get('pid')
                     windows = pid_windows.get(pid)
                     if not windows:
                         continue  # 没有可见窗口，跳过
 
-                    # 过滤特殊类名与系统进程
+                    # 过滤特殊类名的窗口
                     valid_window_found = False
                     for hwnd, title, cls in windows:
-                        if cls in ["MSCTFIME UI", "IAIMETIPWndClass", "TIPBand", "Candidate"]:
-                            continue
-                        valid_window_found = True
-                        break
+                        if cls not in ["MSCTFIME UI", "IAIMETIPWndClass", "TIPBand", "Candidate"]:
+                            valid_window_found = True
+                            break
                     if not valid_window_found:
                         continue
 
-                    app_name = process_info.get('name', '').replace('.exe', '')
                     # 检查是否已知（固定或用户添加）
-                    is_known_app = any(self._norm_path(p) == self._norm_path(exe_path) for p in known_apps_paths)
-                    if is_known_app:
+                    if self._norm_path(exe_path) in normalized_known_paths:
                         continue
 
                     if exe_path not in running_processes:
+                        app_name = process_info.get('name', '').replace('.exe', '')
                         # 使用图标提取函数获取图标（可能为 None）
                         icon_path = None
                         try:

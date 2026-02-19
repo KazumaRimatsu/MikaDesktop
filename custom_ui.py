@@ -1,7 +1,11 @@
-from PySide6.QtCore import QObject
-from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel)
+from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel, QMessageBox)
+
+# 添加Windows API导入，用于输入法切换
+import win32con
+import win32api
 
 
 class IconHoverFilter(QObject):
@@ -169,6 +173,78 @@ class ContextPopup(QWidget):
 		self.show()
 		self.raise_()
 		self.activateWindow()
+
+class IMENotification(QWidget):
+	"""输入法切换提示界面"""
+	def __init__(self, parent=None):
+		super().__init__(parent)
+		self.setup_ui()
+		self.setup_animation()
+	
+	def setup_ui(self):
+		"""设置UI界面"""
+		# 设置窗口标志
+		self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+		self.setAttribute(Qt.WA_TranslucentBackground)
+		self.setAttribute(Qt.WA_ShowWithoutActivating)
+		
+		# 设置固定大小
+		self.setFixedSize(200, 80)
+		
+		# 主布局
+		layout = QVBoxLayout(self)
+		layout.setContentsMargins(0, 0, 0, 0)
+		
+		# 提示标签
+		self.label = QLabel("输入法切换")
+		self.label.setAlignment(Qt.AlignCenter)
+		self.label.setStyleSheet("""
+			QLabel {
+				color: white;
+				background-color: rgba(0, 0, 0, 180);
+				border-radius: 10px;
+				padding: 15px;
+				font-size: 16px;
+				font-weight: bold;
+			}
+		""")
+		layout.addWidget(self.label)
+	
+	def setup_animation(self):
+		"""设置动画效果"""
+		# 淡入淡出动画
+		self.fade_animation = QPropertyAnimation(self, b"windowOpacity")
+		self.fade_animation.setDuration(300)  # 300ms
+		self.fade_animation.setStartValue(0.0)
+		self.fade_animation.setEndValue(1.0)
+		self.fade_animation.setEasingCurve(QEasingCurve.InOutQuad)
+	
+	def show_notification(self, screen_center=None):
+		"""显示提示"""
+		# 如果没有指定位置，则显示在屏幕中央
+		if screen_center is None:
+			screen = QApplication.primaryScreen().geometry()
+			x = (screen.width() - self.width()) // 2
+			y = (screen.height() - self.height()) // 2
+		else:
+			x, y = screen_center
+			
+		self.move(x, y)
+		self.show()
+		
+		# 播放淡入动画
+		self.setWindowOpacity(0.0)
+		self.fade_animation.start()
+		
+		# 1.5秒后自动关闭
+		QTimer.singleShot(1500, self.fade_out_and_close)
+	
+	def fade_out_and_close(self):
+		"""淡出并关闭"""
+		self.fade_animation.finished.connect(self.close)
+		self.fade_animation.setDirection(QPropertyAnimation.Backward)
+		self.fade_animation.start()
+
 
 class ShutdownDialog(QDialog):
 	def __init__(self, parent=None):
@@ -338,3 +414,95 @@ class ShutdownDialog(QDialog):
 		if reply == QMessageBox.Yes:
 			self.selected_action = action
 			self.accept()
+
+
+# 全局快捷键处理类，用于实现Windows徽标键+空格键切换输入法
+class GlobalHotkeyManager(QObject):
+	"""
+	全局快捷键管理器，使用PySide6的QShortcut实现快捷键监听
+	"""
+	# 定义信号
+	hotkey_pressed = Signal()
+	
+	def __init__(self, parent=None):
+		super().__init__(parent)
+		self.shortcuts = []  # 存储快捷键对象
+		self.active_shortcut = None  # 当前激活的快捷键
+		self.hotkey_combo = None  # 记录使用的快捷键组合
+		self.wallpaper_window = None  # 壁纸窗口引用
+		self.ime_notification = None  # 输入法切换提示界面
+		
+	def start(self):
+		"""启动快捷键管理器"""
+		# 尝试注册快捷键组合
+		if not self.try_register_shortcuts():
+			print("无法注册任何快捷键，功能禁用")
+			return False
+		
+		print(f"快捷键已注册: {self.hotkey_combo}")
+		return True
+	
+	def try_register_shortcuts(self):
+		"""尝试注册两种快捷键组合"""
+		from PySide6.QtWidgets import QApplication
+		from PySide6.QtGui import QKeySequence, QShortcut
+		
+		# 获取应用程序主窗口
+		app = QApplication.instance()
+		if not app:
+			print("无法获取应用程序实例")
+			return False
+		
+		# 只保留两种快捷键组合
+		hotkey_combinations = [
+			{"key": QKeySequence("Ctrl+Shift+Space"), "name": "Ctrl+Shift"},
+			{"key": QKeySequence("Meta+Alt+Space"), "name": "Windows徽标键+Alt+空格键"}
+		]
+		
+		# 尝试注册每个快捷键组合
+		for combo in hotkey_combinations:
+			try:
+				# 创建快捷键对象
+				shortcut = QShortcut(combo["key"], app.activeWindow() or app.focusWidget())
+				if shortcut:
+					# 连接激活信号
+					shortcut.activated.connect(self.handle_hotkey)
+					self.shortcuts.append(shortcut)
+					self.hotkey_combo = combo["name"]
+					self.active_shortcut = shortcut
+					print(f"成功注册快捷键: {combo["name"]}")
+					return True
+			except Exception as e:
+				print(f"注册快捷键失败: {combo['name']}，错误: {e}")
+				continue
+		
+		return False
+	
+	def handle_hotkey(self):
+		"""处理快捷键事件，切换输入法"""
+		try:
+			print(f"{self.hotkey_combo}被按下，切换输入法")
+			
+			# 显示输入法切换提示
+			self.show_ime_notification()
+			
+			# 使用Windows API发送输入法切换消息
+			# 尝试多种切换方式，以适应不同系统配置
+			try:
+				# 方法1: 尝试使用Win+Space（Windows 10/11默认方式）
+				win32api.keybd_event(win32con.VK_LWIN, 0, 0, 0)
+				win32api.keybd_event(0x20, 0, 0, 0)  # 空格键
+				win32api.keybd_event(0x20, 0, win32con.KEYEVENTF_KEYUP, 0)
+				win32api.keybd_event(win32con.VK_LWIN, 0, win32con.KEYEVENTF_KEYUP, 0)
+			except:
+				# 方法2: 如果方法1失败，尝试Ctrl+Shift
+				win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+				win32api.keybd_event(win32con.VK_SHIFT, 0, 0, 0)
+				win32api.keybd_event(win32con.VK_SHIFT, 0, win32con.KEYEVENTF_KEYUP, 0)
+				win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+			
+			# 发出信号，供其他组件响应
+			self.hotkey_pressed.emit()
+			
+		except Exception as e:
+			print(f"处理快捷键时出错: {e}")

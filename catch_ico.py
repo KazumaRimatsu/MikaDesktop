@@ -105,7 +105,7 @@ class WindowsIconExtractor:
     - 内置图标缓存机制
     """
     
-    def __init__(self, enable_cache: bool = True, cache_size: int = 100):
+    def __init__(self, enable_cache: bool = True, cache_size: int = 50):
         """
         初始化图标提取器
         
@@ -127,6 +127,7 @@ class WindowsIconExtractor:
         self._cache_enabled = enable_cache
         self._icon_cache = {}  # 图标缓存字典
         self._max_cache_size = cache_size
+        self._cache_keys = []  # 用于LRU缓存实现
         
         # 系统路径
         self._system_paths = {
@@ -168,6 +169,9 @@ class WindowsIconExtractor:
         # 检查缓存
         cache_key = self._make_cache_key(source, size, icon_index)
         if self._cache_enabled and cache_key in self._icon_cache:
+            # 优化：实现LRU缓存，将使用的缓存项移到最前面
+            self._cache_keys.remove(cache_key)
+            self._cache_keys.append(cache_key)
             return self._icon_cache[cache_key]
         
         # 判断源类型并分发
@@ -414,17 +418,26 @@ class WindowsIconExtractor:
     
     # ====================== 私有方法 ======================
     
-    def _make_cache_key(self, source, size, index) -> str:
+    def _make_cache_key(self, source, size, index):
         """生成缓存键"""
-        return f"{source}|{size}|{index}"
+        return f"{str(source)}|{size}|{index}"
     
     def _add_to_cache(self, key: str, icon: ExtractedIcon) -> None:
-        """添加图标到缓存"""
-        if len(self._icon_cache) >= self._max_cache_size:
-            # 移除最早的一个条目（简单的LRU策略）
-            oldest_key = next(iter(self._icon_cache))
-            del self._icon_cache[oldest_key]
-        self._icon_cache[key] = icon
+        """添加图标到缓存，实现LRU机制"""
+        if self._cache_enabled:
+            # 如果缓存已满，移除最旧的项
+            if len(self._icon_cache) >= self._max_cache_size and key not in self._icon_cache:
+                oldest_key = self._cache_keys.pop(0)
+                if oldest_key in self._icon_cache:
+                    del self._icon_cache[oldest_key]
+            
+            # 存储新结果
+            self._icon_cache[key] = icon
+            
+            # 更新缓存键列表
+            if key in self._cache_keys:
+                self._cache_keys.remove(key)
+            self._cache_keys.append(key)
     
     def _extract_file_icon(self, 
                            file_path: str, 
