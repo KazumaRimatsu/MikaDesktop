@@ -5,9 +5,10 @@ import win32con
 import win32api
 import os
 import sys
-
-import MakeAppIcon
 import hashlib
+
+from . import MakeAppIcon
+
 
 
 class ProcessManager:

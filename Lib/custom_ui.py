@@ -174,77 +174,6 @@ class ContextPopup(QWidget):
 		self.raise_()
 		self.activateWindow()
 
-class IMENotification(QWidget):
-	"""输入法切换提示界面"""
-	def __init__(self, parent=None):
-		super().__init__(parent)
-		self.setup_ui()
-		self.setup_animation()
-	
-	def setup_ui(self):
-		"""设置UI界面"""
-		# 设置窗口标志
-		self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-		self.setAttribute(Qt.WA_TranslucentBackground)
-		self.setAttribute(Qt.WA_ShowWithoutActivating)
-		
-		# 设置固定大小
-		self.setFixedSize(200, 80)
-		
-		# 主布局
-		layout = QVBoxLayout(self)
-		layout.setContentsMargins(0, 0, 0, 0)
-		
-		# 提示标签
-		self.label = QLabel("输入法切换")
-		self.label.setAlignment(Qt.AlignCenter)
-		self.label.setStyleSheet("""
-			QLabel {
-				color: white;
-				background-color: rgba(0, 0, 0, 180);
-				border-radius: 10px;
-				padding: 15px;
-				font-size: 16px;
-				font-weight: bold;
-			}
-		""")
-		layout.addWidget(self.label)
-	
-	def setup_animation(self):
-		"""设置动画效果"""
-		# 淡入淡出动画
-		self.fade_animation = QPropertyAnimation(self, b"windowOpacity")
-		self.fade_animation.setDuration(300)  # 300ms
-		self.fade_animation.setStartValue(0.0)
-		self.fade_animation.setEndValue(1.0)
-		self.fade_animation.setEasingCurve(QEasingCurve.InOutQuad)
-	
-	def show_notification(self, screen_center=None):
-		"""显示提示"""
-		# 如果没有指定位置，则显示在屏幕中央
-		if screen_center is None:
-			screen = QApplication.primaryScreen().geometry()
-			x = (screen.width() - self.width()) // 2
-			y = (screen.height() - self.height()) // 2
-		else:
-			x, y = screen_center
-			
-		self.move(x, y)
-		self.show()
-		
-		# 播放淡入动画
-		self.setWindowOpacity(0.0)
-		self.fade_animation.start()
-		
-		# 1.5秒后自动关闭
-		QTimer.singleShot(1500, self.fade_out_and_close)
-	
-	def fade_out_and_close(self):
-		"""淡出并关闭"""
-		self.fade_animation.finished.connect(self.close)
-		self.fade_animation.setDirection(QPropertyAnimation.Backward)
-		self.fade_animation.start()
-
 
 class ShutdownDialog(QDialog):
 	def __init__(self, parent=None):
@@ -253,8 +182,9 @@ class ShutdownDialog(QDialog):
 		self.selected_action = None
 		self.setWindowTitle("电源操作")
 		self.setFixedSize(600, 150)
+		self.setWindowFlag(Qt.FramelessWindowHint)
 		self.setModal(True)
-
+		self.move(QApplication.primaryScreen().availableGeometry().center() - self.rect().center())
 		self.init_ui()
 
 	def init_ui(self):

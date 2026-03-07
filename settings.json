@@ -1,0 +1,16 @@
+{
+  "apps": [],
+  "wallpaper": "",
+  "except_processes": [
+    "shellexperiencehost.exe",
+    "applicationframehost.exe",
+    "startmenuexperiencehost.exe",
+    "widgets.exe",
+    "widgetservice.exe",
+    "python.exe",
+    "wetype_server.exe",
+    "wetype_service.exe",
+    "wetype_renderer.exe",
+    "systemsettings.exe"
+  ]
+}

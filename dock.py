@@ -1,96 +1,226 @@
 import json
 import os
 import sys
+from typing import Dict, List, Optional, Any
 
-import psutil  # 添加进程监控库
+import psutil
 import win32con
 import win32gui
-import win32process  # 新增导入
-from PySide6.QtCore import Qt, QSize, QTimer, QRect, QPropertyAnimation, QEasingCurve, QEvent, QPoint
+import win32process
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
                                QMessageBox, QDialog, QLabel, QInputDialog, QPlainTextEdit)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
 
-from custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
-from process_manager import ProcessManager  # 导入新的进程管理器
-# from MakeAppIcon import compose_on_template  # removed duplicate processing, use ProcessManager's extractor
-from wallpaper import WallpaperWindow
-from extension_window import ExtensionWindow  # 导入拓展窗口类
+from Lib.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
+from Lib.process_manager import ProcessManager
+import Lib.goodbye_tray as goodbye_tray
+
+
+# 常量定义
+class DockConstants:
+    """Dock应用常量定义"""
+    BUTTON_SIZE = 60
+    ICON_SIZE = 48
+    BORDER_RADIUS = 16
+    WINDOW_BORDER_RADIUS = 18
+    BUTTON_SPACING = 10
+    WINDOW_MARGIN = 16
+    SEPARATOR_WIDTH = 2
+    PROCESS_CHECK_INTERVAL = 1400  # 进程检查间隔（毫秒）
+    
+    # 颜色常量
+    COLOR_BACKGROUND = "#ECECEC"
+    COLOR_HOVER = "#DADADA"
+    COLOR_BORDER_ACTIVE = "#4a86e8"
+    COLOR_BORDER_INACTIVE = "transparent"
+    COLOR_BG_ACTIVE = "rgba(74, 134, 232, 100)"
+    COLOR_BG_HOVER_ACTIVE = "rgba(58, 118, 216, 150)"
+    COLOR_BG_HOVER_INACTIVE = "rgba(200, 200, 200, 100)"
+    COLOR_SEPARATOR = "#CCCCCC"
+    COLOR_WINDOW_BORDER = "rgba(0, 0, 0, 0.1)"
+    
+    # 样式表模板
+    BUTTON_STYLE_RUNNING = f"""
+        QPushButton {{
+            border: 2px solid {COLOR_BORDER_ACTIVE};
+            border-radius: {BORDER_RADIUS}px;
+            background-color: {COLOR_BG_ACTIVE};
+        }}
+        QPushButton:hover {{
+            border: 2px solid {COLOR_BORDER_ACTIVE};
+            background-color: {COLOR_BG_HOVER_ACTIVE};
+        }}
+    """
+    
+    BUTTON_STYLE_INACTIVE = f"""
+        QPushButton {{
+            border: 2px solid {COLOR_BORDER_INACTIVE};
+            border-radius: {BORDER_RADIUS}px;
+            background-color: {COLOR_BACKGROUND};
+        }}
+        QPushButton:hover {{
+            border: 2px solid {COLOR_BORDER_ACTIVE};
+            background-color: {COLOR_BG_HOVER_INACTIVE};
+        }}
+    """
+    
+    CONTAINER_STYLE = f"""
+        QWidget {{
+            background-color: {COLOR_BACKGROUND};
+            border-radius: {BORDER_RADIUS}px;
+        }}
+    """
+    
+    SEPARATOR_STYLE = f"""
+        QWidget {{
+            background-color: {COLOR_SEPARATOR};
+            border-radius: 1px;
+        }}
+    """
+    
+    MAIN_WINDOW_STYLE = f"""
+        QMainWindow {{
+            background-color: {COLOR_BACKGROUND};
+            border: 1px solid {COLOR_WINDOW_BORDER};
+            border-radius: {WINDOW_BORDER_RADIUS}px;
+        }}
+        QPushButton {{
+            border: none;
+            border-radius: {BORDER_RADIUS}px;
+            background-color: {COLOR_BACKGROUND};
+        }}
+        QPushButton:hover {{
+            background-color: {COLOR_HOVER};
+        }}
+    """
 
 
 
 class DockApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        # 获取当前脚本所在目录
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.settings_file = os.path.join(self.script_dir, "apps.json")
-        self.wallpaper_window = None  # 添加壁纸窗口引用
-        self.wallpaper_path = ""  # 添加壁纸路径属性
-        self.running_apps = {}  # 记录正在运行的应用
-        self.app_buttons = {}  # 存储按钮引用，用于更新样式
-        self.pinned_app_buttons = {}  # 存储固定应用按钮引用
-        self.running_app_buttons = {}  # 存储运行中应用按钮引用
-        self.icon_hover_filter = IconHoverFilter(self)
-        # 新增：用于保存几何动画引用，防止被回收
-        self.geometry_anim = None
-        # 初始化新的进程管理器
-        self.process_manager = ProcessManager()
-        # 新增：拓展窗口
-        self.extension_window = None
+        self.settings_file = os.path.join(self.script_dir, "settings.json")
         
-        # 在初始化UI前，先初始化应用列表（修复AttributeError问题）
-        self.pinned_apps = []  # 初始化固定应用列表
-        self.apps = []  # 初始化用户添加的应用列表
-        self.running_apps_list = []  # 初始化运行中应用列表
+        # 应用数据存储
+        self.running_apps: Dict[str, str] = {}
+        self.app_buttons: Dict[str, QPushButton] = {}
+        self.pinned_app_buttons: Dict[str, QPushButton] = {}
+        self.running_app_buttons: Dict[str, QPushButton] = {}
+        
+        # 应用列表
+        self.pinned_apps: List[Dict[str, Any]] = []
+        self.apps: List[Dict[str, Any]] = []
+        self.running_apps_list: List[Dict[str, Any]] = []
+        
+        # UI组件
+        self.icon_hover_filter = IconHoverFilter(self)
+        self.process_manager = ProcessManager()
+        self.geometry_anim = None
         
         self.init_ui()
-        self.create_tray_icon()
-        self.load_settings()  # 在初始化后加载设置
-        self.load_pinned_apps()  # 加载任务栏固定的应用
+        self.load_settings()
+        self.load_pinned_apps()
         self.update_app_buttons()
-        self.create_wallpaper_window()  # 创建壁纸窗口
-        self.setup_process_monitoring()  # 设置进程监控
-        
-        # 初始化拓展窗口
-        self.create_extension_window()
-        
-        # 添加应用程序退出事件处理器
+        self.setup_process_monitoring()
+        # Position the window at center horizontally and 20 pixels from bottom
+        self.update_window_position()
         self.destroyed.connect(self.exit_app)
 
     def eventFilter(self, obj, event):
-        """
-        过滤键盘事件，屏蔽关闭窗口相关的快捷键
-        """
+        """过滤键盘事件，屏蔽关闭窗口相关的快捷键"""
         if event.type() == QEvent.KeyPress:
             key = event.key()
             modifiers = event.modifiers()
             
-            # 屏蔽常见地关闭窗口快捷键组合
-            if (
-                (modifiers == Qt.ControlModifier and key == Qt.Key_Q) or  # Ctrl+Q
-                (modifiers == Qt.ControlModifier and key == Qt.Key_W) or  # Ctrl+W
-                (modifiers == Qt.AltModifier and key == Qt.Key_F4) or     # Alt+F4
-                (modifiers == Qt.ControlModifier and modifiers == Qt.ShiftModifier and key == Qt.Key_W) or  # Ctrl+Shift+W
-                (key == Qt.Key_Escape)  # Escape
-            ):
-                print(f"阻止快捷键: {modifiers.name() if modifiers else 'No Modifiers'}+{event.text() if event.text() else key}")
-                return True  # 表示事件已被处理，不再传递
+            # 屏蔽常见关闭窗口快捷键组合
+            blocked_shortcuts = [
+                (Qt.ControlModifier, Qt.Key_Q),  # Ctrl+Q
+                (Qt.ControlModifier, Qt.Key_W),  # Ctrl+W
+                (Qt.AltModifier, Qt.Key_F4),     # Alt+F4
+                (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_W),  # Ctrl+Shift+W
+                (Qt.NoModifier, Qt.Key_Escape)   # Escape
+            ]
+            
+            for mod, k in blocked_shortcuts:
+                if modifiers == mod and key == k:
+                    print(f"阻止快捷键: {modifiers.name() if modifiers else 'No Modifiers'}+{event.text() if event.text() else key}")
+                    return True
         
-        # 其他事件按正常流程处理
         return super().eventFilter(obj, event)
+    
+    def create_app_button(self, app_data: Dict[str, Any], button_dict: Dict[str, QPushButton], 
+                         layout: QHBoxLayout, is_running_app: bool = False) -> QPushButton:
+        """创建统一的应用按钮"""
+        app_name = app_data['name']
+        
+        # 确保图标存在
+        if 'icon' not in app_data or not app_data['icon']:
+            app_data['icon'] = self.process_manager.extract_icon(app_data.get('path', '')) or ''
+        
+        # 创建按钮
+        button = QPushButton()
+        button.setFixedSize(DockConstants.BUTTON_SIZE, DockConstants.BUTTON_SIZE)
+        button.setMouseTracking(True)
+        
+        # 设置图标
+        icon_path = app_data.get('icon') or ''
+        if icon_path and os.path.exists(icon_path):
+            pixmap = QPixmap(icon_path)
+            if not pixmap.isNull():
+                button.setIcon(QIcon(pixmap))
+                button.setIconSize(QSize(DockConstants.ICON_SIZE, DockConstants.ICON_SIZE))
+        
+        # 检查运行状态并设置样式
+        if is_running_app:
+            is_running = self.process_manager.is_process_running(app_data['path'])
+        else:
+            is_running = app_name in self.running_apps
+        
+        self.set_button_style(button, is_running)
+        
+        # 绑定点击事件
+        button.clicked.connect(lambda checked, app=app_data: self.handle_app_click(app))
+        
+        # 绑定右键菜单
+        button.setContextMenuPolicy(Qt.CustomContextMenu)
+        button.customContextMenuRequested.connect(
+            lambda pos, app=app_data, btn=button: self.show_app_context_menu(pos, app, btn)
+        )
+        
+        # 设置工具提示
+        button.setToolTip(app_name)
+        
+        # 安装悬浮事件过滤器
+        button.setAttribute(Qt.WA_Hover, True)
+        button.setMouseTracking(True)
+        button.installEventFilter(self.icon_hover_filter)
+        
+        # 保存按钮引用
+        button_dict[app_name] = button
+        
+        # 添加到布局
+        layout.addWidget(button)
+        
+        return button
 
     def load_pinned_apps(self):
         """获取Windows任务栏上固定的应用程序"""
         try:
-            # 方法1: 从任务栏固定的应用路径获取
             pinned_apps = self.get_pinned_apps_from_taskbar()
             self.pinned_apps = pinned_apps
         except Exception as e:
-            print(f"获取固定应用时出错: {e}")
+            self.handle_error(f"获取固定应用时出错: {e}")
             self.pinned_apps = []
+    
+    def handle_error(self, message: str, show_dialog: bool = False):
+        """统一错误处理"""
+        print(message)
+        if show_dialog:
+            QMessageBox.warning(self, "错误", message)
 
     def get_pinned_apps_from_taskbar(self):
         """从任务栏固定的应用程序路径获取应用"""
@@ -111,8 +241,7 @@ class DockApp(QMainWindow):
                                 pinned_apps.append(app_info)
         
         except Exception as e:
-            print(f"获取任务栏固定应用失败: {e}")
-            # 如果无法获取固定应用，则返回空列表
+            self.handle_error(f"获取任务栏固定应用失败: {e}")
             return []
             
         return pinned_apps
@@ -159,14 +288,14 @@ class DockApp(QMainWindow):
                 'is_pinned': True  # 标记为固定应用
             }
         except Exception as e:
-            print(f"解析快捷方式 {shortcut_path} 失败: {e}")
+            self.handle_error(f"解析快捷方式 {shortcut_path} 失败: {e}")
             return None
 
     def setup_process_monitoring(self):
         """设置定时器来监控进程状态"""
         self.process_timer = QTimer()
         self.process_timer.timeout.connect(self.check_running_processes)
-        self.process_timer.start(2000)  # 优化：将检查间隔从1.1秒增加到2秒，减少CPU占用
+        self.process_timer.start(DockConstants.PROCESS_CHECK_INTERVAL)
 
     def check_running_processes(self):
         """检查所有应用的运行状态 - 只考虑有窗口的应用"""
@@ -236,8 +365,6 @@ class DockApp(QMainWindow):
             
             # 更新界面
             self.update_app_buttons()
-
-            # 删除刷新拓展窗口中的托盘图标代码
 
             # 根据当前运行的应用（仅限 Dock 中的应用）调整 Dock 的层级，
             # 以避免遮挡全屏程序（例如全屏视频/浏览器）
@@ -409,7 +536,7 @@ class DockApp(QMainWindow):
                     0, 0, 0, 0, 
                     win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                 )
-                print(f"窗口 {title} 已成功激活，Dock保持在顶层")
+                print(f"窗口 {title} 已成功激活")
             except Exception as e:
                 print(f"激活窗口时出错: {e}")
         else:
@@ -447,50 +574,33 @@ class DockApp(QMainWindow):
             print(f"激活窗口时出错: {e}")
 
     def init_ui(self):
+        """初始化用户界面"""
         self.setWindowTitle("Dock")
-        # 修改窗口标志，使用Qt.Tool标志防止被其他窗口遮挡
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        #self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_AlwaysStackOnTop)  # 确保始终在顶层
-
-        # 安装事件过滤器，屏蔽关闭快捷键
+        self.setAttribute(Qt.WA_AlwaysStackOnTop)
         self.installEventFilter(self)
+        self.setStyleSheet(DockConstants.MAIN_WINDOW_STYLE)
 
         # 创建中央窗口部件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # 创建主布局 - 根据窗口位置调整方向
+        # 创建主布局
         self.main_layout = QVBoxLayout(central_widget)
-        self.main_layout.setContentsMargins(10, 10, 10, 10)
+        self.main_layout.setContentsMargins(15, 15, 15, 15)
         self.main_layout.setSpacing(5)
 
-        # 创建一个布局来容纳菜单按钮、固定应用按钮容器、应用按钮容器和设置按钮
+        # 创建内容布局
         self.content_layout = QHBoxLayout()
         self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_layout.setSpacing(10)
+        self.content_layout.setSpacing(DockConstants.BUTTON_SPACING)
 
         # 添加菜单按钮
-        self.menu_button = QPushButton()
-        self.menu_button.setFixedSize(60, 60)
-        self.menu_button.setIcon(QIcon(os.path.join(self.script_dir,"more.png")))
-        self.menu_button.setIconSize(QSize(48, 48))
-        self.menu_button.setStyleSheet("""
-            QPushButton {
-                    border: 2px solid transparent;
-                    border-radius: 16px;
-                    background-color: #ECECEC;
-                }
-                QPushButton:hover {
-                    border: 2px solid #4a86e8;
-                    background-color: rgba(200, 200, 200, 100);
-                }
-        """)
-        self.menu_button.clicked.connect(self.show_menu)
-        # 添加右键菜单支持
-        self.menu_button.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.menu_button.customContextMenuRequested.connect(self.show_menu)
+        self.menu_button = self.create_special_button(
+            os.path.join(self.script_dir, "res", "icon_start.png"),
+            self.show_menu
+        )
         self.content_layout.addWidget(self.menu_button)
 
         # 创建固定应用按钮容器
@@ -499,24 +609,12 @@ class DockApp(QMainWindow):
         self.pinned_app_layout.setContentsMargins(0, 0, 0, 0)
         self.pinned_app_layout.setSpacing(10)  # 设置最小间距为10
         # 设置容器非透明样式
-        self.pinned_app_container.setStyleSheet("""
-            QWidget {
-                background-color: #ECECEC;
-                border-radius: 16px;
-            }
-        """)
-        # 初始隐藏固定应用容器，直到有固定应用时才显示
-        self.pinned_app_container.setVisible(len(self.pinned_apps) > 0)
-
+        self.pinned_app_container.setStyleSheet(DockConstants.CONTAINER_STYLE)
+        
         # 创建分隔符
         self.separator = QWidget()
         self.separator.setFixedWidth(2)  # 设置分隔符宽度为2像素
-        self.separator.setStyleSheet("""
-            QWidget {
-                background-color: #CCCCCC;  /* 设置分隔符颜色 */
-                border-radius: 1px;
-            }
-        """)
+        self.separator.setStyleSheet(DockConstants.SEPARATOR_STYLE)
         
         # 创建用户添加应用按钮容器
         self.app_container = QWidget()
@@ -524,22 +622,12 @@ class DockApp(QMainWindow):
         self.app_layout.setContentsMargins(0, 0, 0, 0)
         self.app_layout.setSpacing(10)  # 设置最小间距为10
         # 设置容器非透明样式
-        self.app_container.setStyleSheet("""
-            QWidget {
-                background-color: #ECECEC;
-                border-radius: 16px;
-            }
-        """)
+        self.app_container.setStyleSheet(DockConstants.CONTAINER_STYLE)
 
         # 创建运行中应用的分隔符
         self.running_separator = QWidget()
         self.running_separator.setFixedWidth(2)  # 设置分隔符宽度为2像素
-        self.running_separator.setStyleSheet("""
-            QWidget {
-                background-color: #CCCCCC;  /* 设置分隔符颜色 */
-                border-radius: 1px;
-            }
-        """)
+        self.running_separator.setStyleSheet(DockConstants.SEPARATOR_STYLE)
 
         # 创建运行中应用按钮容器
         self.running_app_container = QWidget()
@@ -547,65 +635,26 @@ class DockApp(QMainWindow):
         self.running_app_layout.setContentsMargins(0, 0, 0, 0)
         self.running_app_layout.setSpacing(10)  # 设置最小间距为10
         # 设置容器非透明样式
-        self.running_app_container.setStyleSheet("""
-            QWidget {
-                background-color: #ECECEC;
-                border-radius: 16px;
-            }
-        """)
+        self.running_app_container.setStyleSheet(DockConstants.CONTAINER_STYLE)
 
-        # 将固定应用容器、分隔符和用户应用容器添加到内容布局中
+        # 将容器添加到内容布局
         self.content_layout.addWidget(self.pinned_app_container)
-        self.content_layout.addWidget(self.separator)  # 添加分隔符
-        self.content_layout.addWidget(self.app_container, 1)  # 用户应用容器可扩展
-        self.content_layout.addWidget(self.running_separator)  # 添加运行应用分隔符
-        self.content_layout.addWidget(self.running_app_container)  # 运行中应用容器
+        self.content_layout.addWidget(self.separator)
+        self.content_layout.addWidget(self.app_container, 1)
+        self.content_layout.addWidget(self.running_separator)
+        self.content_layout.addWidget(self.running_app_container)
 
-        # 添加设置按钮到独立布局中，并右对齐
+        # 添加设置按钮
         settings_layout = QHBoxLayout()
-        settings_layout.addStretch()  # 添加伸缩项以右对齐
-        self.settings_button = QPushButton()
-        self.settings_button.setFixedSize(60, 60)
-        self.settings_button.setIcon(QIcon(os.path.join(self.script_dir,"settings.png")))
-        self.settings_button.setIconSize(QSize(48, 48))
-        self.settings_button.setStyleSheet("""
-            QPushButton {
-                    border: 2px solid transparent;
-                    border-radius: 16px;
-                    background-color: #ECECEC;
-                }
-                QPushButton:hover {
-                    border: 2px solid #4a86e8;
-                    background-color: rgba(200, 200, 200, 100);
-                }
-        """)
-        self.settings_button.clicked.connect(self.open_settings)
+        settings_layout.addStretch()
+        self.settings_button = self.create_special_button(
+            os.path.join(self.script_dir, "res", "icon_settings.png"),
+            self.open_settings
+        )
         settings_layout.addWidget(self.settings_button)
         self.content_layout.addLayout(settings_layout)
 
         self.main_layout.addLayout(self.content_layout)
-
-        # 设置窗口大小和位置
-        self.update_window_position()
-
-        # 设置样式
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #ECECEC;
-                border: 1px solid rgba(0, 0, 0, 0.1);
-                border-radius: 18px;
-                
-            }
-            QPushButton {
-                border: none;
-                border-radius: 16px;
-                background-color: #ECECEC;
-            }
-            QPushButton:hover {
-                background-color: #DADADA;
-            }
-        """)
-        # 初始化图标悬浮提示（必须在 UI 创建后调用）
         self.init_tooltip()
 
     def update_window_position(self):
@@ -616,13 +665,13 @@ class DockApp(QMainWindow):
         pinned_button_count = len(self.pinned_apps)
         user_button_count = len(self.apps)
         running_button_count = len(self.running_apps_list)
-        button_width = 60  # 每个按钮宽度
-        button_spacing = 10  # 按钮间间距
-        separator_width = 2  # 分隔符宽度
-        margin = 10  # 边距
+        button_width = DockConstants.BUTTON_SIZE
+        button_spacing = DockConstants.BUTTON_SPACING  # 按钮间间距
+        separator_width = DockConstants.SEPARATOR_WIDTH  # 分隔符宽度
+        margin = DockConstants.WINDOW_MARGIN  # 边距
         
         # 基础宽度：菜单按钮 + 设置按钮 + 边距
-        base_width = 60 + 60 + (margin * 2)  # 菜单按钮 + 设置按钮 + 左右边距
+        base_width = DockConstants.BUTTON_SIZE + DockConstants.BUTTON_SIZE + (margin * 2)  # 菜单按钮 + 设置按钮 + 左右边距
         # 固定应用按钮总宽度：按钮数量 * 按钮宽度 + 间距
         pinned_apps_width = pinned_button_count * button_width
         if pinned_button_count > 0:
@@ -636,24 +685,20 @@ class DockApp(QMainWindow):
         if running_button_count > 0:
             running_apps_width += (running_button_count - 1) * button_spacing  # 按钮间间距
         
-        # 加上两个分隔符宽度
-        total_width = base_width + pinned_apps_width + separator_width + user_apps_width + separator_width + running_apps_width
+        # 根据分隔符可见性计算实际宽度
+        separator1_width = DockConstants.SEPARATOR_WIDTH if (hasattr(self, 'separator') and self.separator.isVisible()) else 0
+        separator2_width = DockConstants.SEPARATOR_WIDTH if (hasattr(self, 'running_separator') and self.running_separator.isVisible()) else 0
+        
+        # 计算总宽度
+        total_width = base_width + pinned_apps_width + separator1_width + user_apps_width + separator2_width + running_apps_width
         max_width = int(screen_geometry.width() * 0.9)
         window_width = min(total_width, max_width)
         
         window_height = 80
         
-        # 计算拓展窗口的宽度和间距
-        extension_width = 150  # 拓展窗口固定宽度
-        min_gap = 80  # 最小水平间距（主窗口右侧到拓展窗口左侧）
-        extension_spacing = max(20, min_gap)  # 保证至少为 min_gap
-        
-        # 计算总宽度（主窗口 + 间距 + 拓展窗口）
-        total_system_width = window_width + extension_spacing + extension_width
-        
         # 计算主窗口的起始X坐标，使整个系统（主窗口+拓展窗口）居中
-        x = (screen_geometry.width() - total_system_width) // 2
-        y = screen_geometry.height() - window_height - 10
+        x = (screen_geometry.width() - window_width) // 2
+        y = screen_geometry.height() - window_height - DockConstants.WINDOW_MARGIN
         
         # 确保 x 不为负
         if x < 0:
@@ -661,44 +706,6 @@ class DockApp(QMainWindow):
         
         # 先设定主窗口目标矩形
         target_rect = QRect(x, y, window_width, window_height)
-        
-        # 更新拓展窗口位置，使用相同的居中计算
-        if hasattr(self, 'extension_window') and self.extension_window:
-            # 计算拓展窗口的位置：主窗口右侧，保持间距
-            extension_x = x + window_width + extension_spacing
-            extension_y = y  # 与主窗口垂直对齐
-
-            # 如果超出屏幕右侧，尝试向左移动主窗口以保留 min_gap
-            overflow = (extension_x + extension_width) - screen_geometry.width()
-            if overflow > 0:
-                # 向左移动主窗口，保证不小于0
-                new_x = max(0, x - overflow)
-                # 更新主窗口目标矩形和拓展窗口X
-                target_rect = QRect(new_x, y, window_width, window_height)
-                extension_x = new_x + window_width + extension_spacing
-                x = new_x  # 供后续使用
-        
-            # 确保拓展窗口在屏幕范围内（兜底）
-            if extension_x + extension_width > screen_geometry.width():
-                extension_x = screen_geometry.width() - extension_width - 10
-        
-            # 设置拓展窗口位置
-            self.extension_window.setGeometry(extension_x, extension_y, extension_width, window_height)
-            
-            # 确保窗口层级与主窗口一致
-            if hasattr(self, 'winId') and hasattr(self.extension_window, 'winId'):
-                try:
-                    main_hwnd = int(self.winId())
-                    ext_hwnd = int(self.extension_window.winId())
-                    # 使用HWND_NOTOPMOST确保窗口层级一致
-                    win32gui.SetWindowPos(
-                        ext_hwnd,
-                        win32con.HWND_NOTOPMOST,
-                        0, 0, 0, 0,
-                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                    )
-                except Exception as e:
-                    print(f"设置窗口层级时出错: {e}")
         
         # 如果窗口尚未显示，直接设置几何（避免首次不可见时的动画问题）
         if not self.isVisible():
@@ -724,6 +731,27 @@ class DockApp(QMainWindow):
         self.geometry_anim.setEndValue(target_rect)
         self.geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
         self.geometry_anim.start()
+    
+    def create_special_button(self, icon_path: str, click_handler) -> QPushButton:
+        """创建特殊按钮（菜单、设置等）"""
+        button = QPushButton()
+        button.setFixedSize(DockConstants.BUTTON_SIZE, DockConstants.BUTTON_SIZE)
+        
+        if os.path.exists(icon_path):
+            button.setIcon(QIcon(icon_path))
+            button.setIconSize(QSize(DockConstants.ICON_SIZE, DockConstants.ICON_SIZE))
+        
+        button.setStyleSheet(DockConstants.BUTTON_STYLE_INACTIVE)
+        button.clicked.connect(click_handler)
+        
+        # 如果是菜单按钮，添加右键菜单支持
+        if click_handler == self.show_menu:
+            button.setContextMenuPolicy(Qt.CustomContextMenu)
+            button.customContextMenuRequested.connect(self.show_menu)
+        
+        return button
+
+
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -731,10 +759,6 @@ class DockApp(QMainWindow):
         painter.setBrush(QColor("#ECECEC"))
         painter.setPen(QPen(QColor(0, 0, 0, 30), 1))
         painter.drawRoundedRect(self.rect(), 15, 15)
-
-    def create_tray_icon(self):
-        # 移除托盘图标功能
-        pass
 
     def add_application(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -843,207 +867,59 @@ class DockApp(QMainWindow):
             x = screen_rect.right() - tw - 4
         self.tooltip.move(x, y)
 
+    def clear_layout(self, layout: QHBoxLayout) -> None:
+        """清空布局中的所有部件"""
+        for i in reversed(range(layout.count())):
+            widget = layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+    
     def update_app_buttons(self):
-        # 清空现有固定应用按钮
-        for i in reversed(range(self.pinned_app_layout.count())):
-            widget = self.pinned_app_layout.itemAt(i).widget()
-            if widget is not None:
-                widget.setParent(None)
-        
-        # 清空现有用户应用按钮
-        for i in reversed(range(self.app_layout.count())):
-            widget = self.app_layout.itemAt(i).widget()
-            if widget is not None:
-                widget.setParent(None)
-        
-        # 清空现有运行中应用按钮
-        for i in reversed(range(self.running_app_layout.count())):
-            widget = self.running_app_layout.itemAt(i).widget()
-            if widget is not None:
-                widget.setParent(None)
+        """更新所有应用按钮"""
+        # 清空现有按钮
+        self.clear_layout(self.pinned_app_layout)
+        self.clear_layout(self.app_layout)
+        self.clear_layout(self.running_app_layout)
         
         # 重置按钮字典
-        self.pinned_app_buttons = {}
-        self.app_buttons = {}
-        self.running_app_buttons = {}
+        self.pinned_app_buttons.clear()
+        self.app_buttons.clear()
+        self.running_app_buttons.clear()
         
         # 添加固定应用按钮
         for app in self.pinned_apps:
-            # Ensure 'icon' key exists
-            if 'icon' not in app:
-                app['icon'] = self.process_manager.extract_icon(app.get('path', '')) or ''
-            
-            button = QPushButton()
-            button.setFixedSize(60, 60)
-            # 启用鼠标追踪以确保鼠标移动事件可用
-            button.setMouseTracking(True)
-            
-            # 设置图标（安全访问）
-            icon_path = app.get('icon') or ''
-            if icon_path and os.path.exists(icon_path):
-                pixmap = QPixmap(icon_path)
-                if not pixmap.isNull():
-                    button.setIcon(QIcon(pixmap))
-                    button.setIconSize(QSize(48, 48))
-            
-            # 检查应用是否正在运行
-            is_running = app['name'] in self.running_apps
-            
-            # 设置按钮样式
-            self.set_button_style(button, is_running)
-            
-            # 绑定点击事件 - 如果应用正在运行则激活窗口，否则启动应用
-            button.clicked.connect(lambda checked, app_data=app: self.handle_app_click(app_data))
-            
-            # 绑定右键菜单
-            button.setContextMenuPolicy(Qt.CustomContextMenu)
-            # 显式传入触发的 button，避免 lambda 包装导致无法正确获取 sender
-            button.customContextMenuRequested.connect(
-                lambda pos, app_data=app, btn=button: self.show_app_context_menu(pos, app_data, btn)
-            )
-            
-            # 添加工具提示显示应用名
-            button.setToolTip(app['name'])
-            
-            # 安装悬浮事件过滤器以显示自定义 tooltip
-            button.setAttribute(Qt.WA_Hover, True)
-            button.setMouseTracking(True)
-            button.installEventFilter(self.icon_hover_filter)
-            
-            # 保存按钮引用
-            self.pinned_app_buttons[app['name']] = button
-            
-            self.pinned_app_layout.addWidget(button)
-        
-        # 显示固定应用容器（如果有固定应用）
-        self.pinned_app_container.setVisible(len(self.pinned_apps) > 0)
+            self.create_app_button(app, self.pinned_app_buttons, self.pinned_app_layout)
         
         # 添加用户添加的应用按钮
         for app in self.apps:
-            # Ensure 'icon' key exists
-            if 'icon' not in app:
-                app['icon'] = self.process_manager.extract_icon(app.get('path', '')) or ''
-            
-            button = QPushButton()
-            button.setFixedSize(60, 60)
-            button.setMouseTracking(True)
-            
-            # 设置图标（安全访问）
-            icon_path = app.get('icon') or ''
-            if icon_path and os.path.exists(icon_path):
-                pixmap = QPixmap(icon_path)
-                if not pixmap.isNull():
-                    button.setIcon(QIcon(pixmap))
-                    button.setIconSize(QSize(48, 48))
-            
-            # 检查应用是否正在运行
-            is_running = app['name'] in self.running_apps
-            
-            # 设置按钮样式
-            self.set_button_style(button, is_running)
-            
-            # 绑定点击事件 - 如果应用正在运行则激活窗口，否则启动应用
-            button.clicked.connect(lambda checked, app_data=app: self.handle_app_click(app_data))
-            
-            # 绑定右键菜单
-            button.setContextMenuPolicy(Qt.CustomContextMenu)
-            button.customContextMenuRequested.connect(
-                lambda pos, app_data=app, btn=button: self.show_app_context_menu(pos, app_data, btn)
-            )
-            
-            # 添加工具提示显示应用名
-            button.setToolTip(app['name'])
-            
-            # 安装悬浮事件过滤器以显示自定义 tooltip
-            button.setAttribute(Qt.WA_Hover, True)
-            button.setMouseTracking(True)
-            button.installEventFilter(self.icon_hover_filter)
-            
-            # 保存按钮引用
-            self.app_buttons[app['name']] = button
-            
-            self.app_layout.addWidget(button)
+            self.create_app_button(app, self.app_buttons, self.app_layout)
         
-        # 添加运行中的应用按钮（未添加到用户列表的）
+        # 添加运行中的应用按钮
         for app in self.running_apps_list:
-            # Ensure 'icon' key exists
-            if 'icon' not in app:
-                app['icon'] = self.process_manager.extract_icon(app.get('path', '')) or ''
-            
-            button = QPushButton()
-            button.setFixedSize(60, 60)
-            button.setMouseTracking(True)
-            
-            # 设置图标（安全访问）
-            icon_path = app.get('icon') or ''
-            if icon_path and os.path.exists(icon_path):
-                pixmap = QPixmap(icon_path)
-                if not pixmap.isNull():
-                    button.setIcon(QIcon(pixmap))
-                    button.setIconSize(QSize(48, 48))
-            
-            # 检查应用是否正在运行（使用 ProcessManager）
-            is_running = self.process_manager.is_process_running(app['path'])
-            
-            # 设置按钮样式
-            self.set_button_style(button, is_running)
-            
-            # 绑定点击事件 - 激活窗口或启动应用
-            button.clicked.connect(lambda checked, app_data=app: self.handle_app_click(app_data))
-            
-            # 绑定右键菜单
-            button.setContextMenuPolicy(Qt.CustomContextMenu)
-            button.customContextMenuRequested.connect(
-                lambda pos, app_data=app, btn=button: self.show_app_context_menu(pos, app_data, btn)
-            )
-            
-            # 添加工具提示显示应用名
-            button.setToolTip(app['name'])
-            
-            # 安装悬浮事件过滤器以显示自定义 tooltip
-            button.setAttribute(Qt.WA_Hover, True)
-            button.setMouseTracking(True)
-            button.installEventFilter(self.icon_hover_filter)
-            
-            # 保存按钮引用
-            self.running_app_buttons[app['name']] = button
-            
-            self.running_app_layout.addWidget(button)
+            self.create_app_button(app, self.running_app_buttons, self.running_app_layout, is_running_app=True)
         
-        # 显示运行中应用容器（如果有运行中应用）
-        self.running_app_container.setVisible(len(self.running_apps_list) > 0)
+        # 更新所有容器的可见性
+        pinned_apps_visible = len(self.pinned_apps) > 0
+        user_apps_visible = len(self.apps) > 0
+        running_apps_visible = len(self.running_apps_list) > 0
         
-        # 更新窗口尺寸以适应按钮数量
+        self.pinned_app_container.setVisible(pinned_apps_visible)
+        self.app_container.setVisible(user_apps_visible)
+        self.running_app_container.setVisible(running_apps_visible)
+        
+        # 更新分隔符可见性（仅在相邻容器都可见时显示）
+        self.separator.setVisible(pinned_apps_visible and user_apps_visible)
+        self.running_separator.setVisible(user_apps_visible and running_apps_visible)
+        
+        # 更新窗口位置以反映宽度变化
         self.update_window_position()
-
+        
     def set_button_style(self, button, is_running):
         """设置按钮样式，根据运行状态"""
         if is_running:
-            # 应用运行时显示蓝色边框
-            button.setStyleSheet("""
-                QPushButton {
-                    border: 2px solid #4a86e8;
-                    border-radius: 16px;
-                    background-color: rgba(74, 134, 232, 100);
-                }
-                QPushButton:hover {
-                    border: 2px solid #4a86e8;
-                    background-color: rgba(58, 118, 216, 150);
-                }
-            """)
+            button.setStyleSheet(DockConstants.BUTTON_STYLE_RUNNING)
         else:
-            # 应用未运行时的样式
-            button.setStyleSheet("""
-                QPushButton {
-                    border: 2px solid transparent;
-                    border-radius: 16px;
-                    background-color: #ECECEC;
-                }
-                QPushButton:hover {
-                    border: 2px solid #4a86e8;
-                    background-color: rgba(200, 200, 200, 100);
-                }
-            """)
+            button.setStyleSheet(DockConstants.BUTTON_STYLE_INACTIVE)
 
     def update_app_button_styles(self):
         """更新所有应用按钮的样式"""
@@ -1217,22 +1093,7 @@ class DockApp(QMainWindow):
         """打开设置对话框"""
         dialog = SettingsDialog(self)
         if dialog.exec():
-            # 由于移除了位置设置，这里不需要更新窗口位置
             pass
-
-    def create_wallpaper_window(self):
-        """创建壁纸窗口，层级设置为最底层"""
-        self.wallpaper_window = WallpaperWindow(image_path=self.wallpaper_path)
-        # 安装事件过滤器到壁纸窗口，屏蔽关闭快捷键
-        if self.wallpaper_window:
-            self.wallpaper_window.installEventFilter(self.wallpaper_window)
-            # 显示壁纸窗口并置于底层
-            self.wallpaper_window.show()
-            # 调整层级关系，确保壁纸在最底层
-            self.wallpaper_window.lower()
-            
-            # 全局快捷键管理器已移除，输入法切换功能已移至扩展窗口的图标菜单中
-        print(self.wallpaper_path)
 
     def load_settings(self):
         try:
@@ -1247,22 +1108,6 @@ class DockApp(QMainWindow):
                             self.process_manager.set_except_processes(except_list)
                         except Exception:
                             pass
-                    # 添加壁纸路径的加载
-                    wallpaper_path = settings.get('wallpaper', '')
-                    if wallpaper_path:
-                        # 确保壁纸路径是绝对路径
-                        if not os.path.isabs(wallpaper_path):
-                            wallpaper_path = os.path.join(os.path.dirname(self.settings_file), wallpaper_path)
-                        self.wallpaper_path = wallpaper_path  # 将壁纸路径保存到实例变量
-                    # 如果壁纸窗口存在，加载壁纸设置
-                    if self.wallpaper_window:
-                        if wallpaper_path and os.path.exists(wallpaper_path):
-                            self.wallpaper_window.set_wallpaper(wallpaper_path)
-                        else:
-                            if wallpaper_path:
-                                print(f"警告: 壁纸文件 {wallpaper_path} 不存在")
-                            # 如果没有壁纸路径或路径不存在，使用默认背景
-                            self.wallpaper_window.setStyleSheet("background-color: #36393F;")
             else:
                 self.apps = []
                 print(f"配置文件 {self.settings_file} 不存在，将使用默认设置")
@@ -1274,9 +1119,6 @@ class DockApp(QMainWindow):
             import traceback
             traceback.print_exc()
             self.apps = []  # 出错时使用默认设置
-            self.wallpaper_path = ""
-            if self.wallpaper_window:
-                self.wallpaper_window.setStyleSheet("background-color: #36393F;")
             self.update_app_buttons()
 
     def save_settings(self):
@@ -1317,7 +1159,7 @@ class DockApp(QMainWindow):
         try:
             os.startfile("cmd.exe")
         except Exception as e:
-            print(f"打开终端失败: {e}")
+            self.handle_error(f"打开终端失败: {e}")
 
     def open_terminal_admin(self):
         """打开管理员终端"""
@@ -1325,14 +1167,14 @@ class DockApp(QMainWindow):
             import subprocess
             subprocess.run(["powershell", "-Command", "Start-Process", "cmd.exe", "-Verb", "RunAs"])
         except Exception as e:
-            print(f"打开管理员终端失败: {e}")
+            self.handle_error(f"打开管理员终端失败: {e}")
 
     def open_task_manager(self):
         """打开任务管理器"""
         try:
             os.startfile("taskmgr.exe")
         except Exception as e:
-            print(f"打开任务管理器失败: {e}")
+            self.handle_error(f"打开任务管理器失败: {e}")
 
     def show_shutdown_menu(self):
         """显示关机或注销对话框"""
@@ -1349,37 +1191,13 @@ class DockApp(QMainWindow):
                 elif action == "hibernate":
                     os.system("rundll32.exe powrprof.dll,SetSuspendState Hibernate")
         except Exception as e:
-            print(f"显示关机对话框失败: {e}")
+            self.handle_error(f"显示关机对话框失败: {e}")
 
 
 
 
-    def create_extension_window(self):
-        """创建拓展窗口，与主程序坞样式和高度一致"""
-        # 创建拓展窗口实例
-        self.extension_window = ExtensionWindow(self)
-        
-        # 获取主窗口当前的几何信息
-        main_geometry = self.geometry()
-        main_x = main_geometry.x()
-        main_y = main_geometry.y()
-        main_width = main_geometry.width()
-        main_height = main_geometry.height()
-        
-        # 初始化拓展窗口位置
-        self.extension_window.initialize_position(main_x, main_y, main_width, main_height)
-        
-        # 显示拓展窗口
-        self.extension_window.show()
-        
-        # 删除显示托盘图标代码
 
     
-    def update_extension_window_position(self, main_x, main_y, main_width, main_height):
-        """更新拓展窗口位置，使其位于主程序坞右侧，高度与主窗口一致"""
-        if hasattr(self, 'extension_window') and self.extension_window:
-            self.extension_window.update_position(main_x, main_y, main_width, main_height)
-            # 删除刷新托盘图标代码
 
     
     def exit_app(self):
@@ -1393,12 +1211,7 @@ class DockApp(QMainWindow):
             if hasattr(self, 'hotkey_manager') and self.hotkey_manager:
                 self.hotkey_manager.stop()
             
-            # 停止拓展窗口
-            if hasattr(self, 'extension_window') and self.extension_window:
-                try:
-                    self.extension_window.close()
-                except Exception as e:
-                    print(f"关闭拓展窗口时出错: {e}")
+
 
             
             # 停止壁纸窗口
@@ -1419,7 +1232,7 @@ class DockApp(QMainWindow):
             self.save_settings()
             
             # 重启explorer.exe
-            os.popen("explorer")
+            goodbye_tray.hello()
             
             print("应用程序已清理资源并退出")
             sys.exit(0)
@@ -1427,7 +1240,7 @@ class DockApp(QMainWindow):
         except Exception as e:
             print(f"退出应用时出错: {e}")
             # 重启explorer.exe
-            os.popen("explorer")
+            goodbye_tray.hello()
             sys.exit(1)
 
     def closeEvent(self, event):
@@ -1576,7 +1389,7 @@ class SettingsDialog(QDialog):
 
 
 def main():
-    os.system("taskkill /f /im explorer.exe")
+    goodbye_tray.goodbye()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 防止关闭主窗口时退出
     
