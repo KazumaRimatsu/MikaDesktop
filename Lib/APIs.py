@@ -27,7 +27,7 @@ class WeatherAPI():
     def GetWeather(self):
         try:
             location = self.GetLocation()
-            url = f"https://api.open-meteo.com/v1/forecast?latitude={location["latitude"]}&longitude={location["longitude"]}&current=temperature_2m,weather_code"
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={location["latitude"]}&longitude={location["longitude"]}&current=temperature_2m,weather_code&forecast_days=1"
             print(url)
             resp = requests.get(url, headers=self.headers, timeout=8)
             if resp.status_code == 200:
@@ -40,7 +40,7 @@ class WeatherAPI():
                     "unit":data["current_units"]["temperature_2m"],
                     "weather": self.GetWeatherStatus(code=data['current']['weather_code'])
                 }
-                #print(weather)
+                print(weather)
                 return weather
             else:
                 return 900
@@ -52,7 +52,7 @@ class WeatherAPI():
             return json.load(file)
 
     def GetWeatherStatus(self, code):
-        for item in self.status["status"]:
+        for item in self.status["weatherinfo"]:
             if item["code"] == code:
                 return item["wea"]
         return "未知"    

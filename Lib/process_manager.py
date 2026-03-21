@@ -25,7 +25,7 @@ class ProcessManager:
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
         try:
-            from catch_ico import WindowsIconExtractor
+            from .catch_ico import WindowsIconExtractor
             # 不立即实例化过重资源，延迟在需要时创建
             self._extractor_class = WindowsIconExtractor
         except Exception:
@@ -332,7 +332,7 @@ class ProcessManager:
                 try:
                     # 优先使用合成库生成统一风格图标
                     try:
-                        composed_bytes = MakeAppIcon.compose_on_template(extracted_icon.image)
+                        composed_bytes = MakeAppIcon.overlay.compose_on_template(extracted_icon.image)
                         with open(icon_path, "wb") as f:
                             f.write(composed_bytes)
                         return icon_path

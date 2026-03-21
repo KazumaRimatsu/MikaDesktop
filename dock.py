@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ import psutil
 import win32con
 import win32gui
 import win32process
+import win32api
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
@@ -17,6 +19,10 @@ from win32com.shell import shell  # type: ignore
 from Lib.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
 from Lib.process_manager import ProcessManager
 import Lib.goodbye_tray as goodbye_tray
+from Lib.xht import xht
+import Lib.log_maker as log_maker
+
+log = log_maker.logger()
 
 
 # 常量定义
@@ -27,7 +33,7 @@ class DockConstants:
     BORDER_RADIUS = 16
     WINDOW_BORDER_RADIUS = 18
     BUTTON_SPACING = 10
-    WINDOW_MARGIN = 16
+    WINDOW_MARGIN = 0
     SEPARATOR_WIDTH = 2
     PROCESS_CHECK_INTERVAL = 1400  # 进程检查间隔（毫秒）
     
@@ -121,6 +127,8 @@ class DockApp(QMainWindow):
         self.process_manager = ProcessManager()
         self.geometry_anim = None
         
+
+        
         self.init_ui()
         self.load_settings()
         self.load_pinned_apps()
@@ -128,6 +136,7 @@ class DockApp(QMainWindow):
         self.setup_process_monitoring()
         # Position the window at center horizontally and 20 pixels from bottom
         self.update_window_position()
+
         self.destroyed.connect(self.exit_app)
 
     def eventFilter(self, obj, event):
@@ -147,7 +156,7 @@ class DockApp(QMainWindow):
             
             for mod, k in blocked_shortcuts:
                 if modifiers == mod and key == k:
-                    print(f"阻止快捷键: {modifiers.name() if modifiers else 'No Modifiers'}+{event.text() if event.text() else key}")
+                    log.info(f"阻止快捷键: {modifiers.name() if modifiers else 'No Modifiers'}+{event.text() if event.text() else key}")
                     return True
         
         return super().eventFilter(obj, event)
@@ -158,8 +167,11 @@ class DockApp(QMainWindow):
         app_name = app_data['name']
         
         # 确保图标存在
-        if 'icon' not in app_data or not app_data['icon']:
+        icon_path = app_data.get('icon') or ''
+        if not icon_path or not os.path.exists(icon_path):
+            # 如果图标路径不存在或文件不存在，重新提取图标
             app_data['icon'] = self.process_manager.extract_icon(app_data.get('path', '')) or ''
+            icon_path = app_data['icon']
         
         # 创建按钮
         button = QPushButton()
@@ -167,7 +179,6 @@ class DockApp(QMainWindow):
         button.setMouseTracking(True)
         
         # 设置图标
-        icon_path = app_data.get('icon') or ''
         if icon_path and os.path.exists(icon_path):
             pixmap = QPixmap(icon_path)
             if not pixmap.isNull():
@@ -218,7 +229,7 @@ class DockApp(QMainWindow):
     
     def handle_error(self, message: str, show_dialog: bool = False):
         """统一错误处理"""
-        print(message)
+        log.error(message)
         if show_dialog:
             QMessageBox.warning(self, "错误", message)
 
@@ -350,7 +361,7 @@ class DockApp(QMainWindow):
                 if button:
                     is_running = app_name in current_running
                     self.set_button_style(button, is_running)
-                    print(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
+                    log.info(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
             
             # 更新运行中应用按钮
             for app_info in self.running_apps_list:
@@ -366,15 +377,16 @@ class DockApp(QMainWindow):
             # 更新界面
             self.update_app_buttons()
 
+            # 注释掉adjust_window_stacking，因为我们现在使用工作区注册机制
             # 根据当前运行的应用（仅限 Dock 中的应用）调整 Dock 的层级，
             # 以避免遮挡全屏程序（例如全屏视频/浏览器）
-            try:
-                self.adjust_window_stacking()
-            except Exception as e:
-                print(f"调整窗口层级时出错: {e}")
+            # try:
+            #     self.adjust_window_stacking()
+            # except Exception as e:
+            #     print(f"调整窗口层级时出错: {e}")
             
         except Exception as e:
-            print(f"检查运行进程时出错: {e}")
+            log.error(f"检查运行进程时出错: {e}")
 
     def adjust_window_stacking(self):
         """根据 Dock 中的应用是否有全屏窗口灵活调整 Dock 的层级"""
@@ -403,7 +415,7 @@ class DockApp(QMainWindow):
                     win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                 )
         except Exception as e:
-            print(f"adjust_window_stacking error: {e}")
+            log.error(f"adjust_window_stacking error: {e}")
 
     def handle_app_click(self, app_data):
         """处理应用按钮点击事件 - 添加状态立即更新"""
@@ -536,11 +548,11 @@ class DockApp(QMainWindow):
                     0, 0, 0, 0, 
                     win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                 )
-                print(f"窗口 {title} 已成功激活")
+                log.info(f"窗口 {title} 已成功激活")
             except Exception as e:
-                print(f"激活窗口时出错: {e}")
+                log.error(f"激活窗口时出错: {e}")
         else:
-            print(f"未找到应用 {app_path} 的可见窗口")
+            log.warning(f"未找到应用 {app_path} 的可见窗口")
 
     def activate_specific_window(self, hwnd):
         """激活指定的窗口句柄"""
@@ -569,16 +581,18 @@ class DockApp(QMainWindow):
                 0, 0, 0, 0, 
                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
             )
-            print(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活，Dock保持在顶层")
+            log.info(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活，Dock保持在顶层")
         except Exception as e:
-            print(f"激活窗口时出错: {e}")
+            log.error(f"激活窗口时出错: {e}")
 
     def init_ui(self):
         """初始化用户界面"""
         self.setWindowTitle("Dock")
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # 移除WindowStaysOnTopHint，使用ToolTip标志避免任务栏显示
+        # 使用Tool标志可以让窗口在某些情况下不被视为常规窗口
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.ToolTip)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_AlwaysStackOnTop)
+        # 移除WA_AlwaysStackOnTop属性，避免始终在最顶层
         self.installEventFilter(self)
         self.setStyleSheet(DockConstants.MAIN_WINDOW_STYLE)
 
@@ -659,7 +673,10 @@ class DockApp(QMainWindow):
 
     def update_window_position(self):
         """更新窗口位置 - 根据应用数量自动调整宽度（使用动画平滑过渡）"""
-        screen_geometry = QApplication.primaryScreen().geometry()
+        # 使用可用几何（工作区）而不是整个屏幕几何
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.geometry()
+        available_geometry = screen.availableGeometry()
         
         # 计算所需宽度：菜单按钮 + 固定应用按钮 + 分隔符 + 用户应用按钮 + 运行应用分隔符 + 运行应用按钮 + 设置按钮 + 间距
         pinned_button_count = len(self.pinned_apps)
@@ -691,14 +708,16 @@ class DockApp(QMainWindow):
         
         # 计算总宽度
         total_width = base_width + pinned_apps_width + separator1_width + user_apps_width + separator2_width + running_apps_width
-        max_width = int(screen_geometry.width() * 0.9)
+        max_width = int(available_geometry.width() * 0.9)
         window_width = min(total_width, max_width)
         
-        window_height = 80
+        window_height = 80  # Dock窗口高度
         
         # 计算主窗口的起始X坐标，使整个系统（主窗口+拓展窗口）居中
-        x = (screen_geometry.width() - window_width) // 2
-        y = screen_geometry.height() - window_height - DockConstants.WINDOW_MARGIN
+        # 使用可用几何的宽度进行计算
+        x = available_geometry.x() + (available_geometry.width() - window_width) // 2
+        # 将窗口放置在可用几何的底部
+        y = available_geometry.bottom() - window_height - DockConstants.WINDOW_MARGIN
         
         # 确保 x 不为负
         if x < 0:
@@ -730,7 +749,10 @@ class DockApp(QMainWindow):
         self.geometry_anim.setStartValue(current_rect)
         self.geometry_anim.setEndValue(target_rect)
         self.geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
+        
         self.geometry_anim.start()
+    
+
     
     def create_special_button(self, icon_path: str, click_handler) -> QPushButton:
         """创建特殊按钮（菜单、设置等）"""
@@ -759,6 +781,14 @@ class DockApp(QMainWindow):
         painter.setBrush(QColor("#ECECEC"))
         painter.setPen(QPen(QColor(0, 0, 0, 30), 1))
         painter.drawRoundedRect(self.rect(), 15, 15)
+    
+    def resizeEvent(self, event):
+        """窗口大小变化事件"""
+        super().resizeEvent(event)
+    
+    def moveEvent(self, event):
+        """窗口移动事件"""
+        super().moveEvent(event)
 
     def add_application(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -816,7 +846,7 @@ class DockApp(QMainWindow):
         try:
             return self.process_manager.extract_icon(exe_path)
         except Exception as e:
-            print(f"提取图标时出错: {e}")
+            log.error(f"提取图标时出错: {e}")
             return None
 
     def init_tooltip(self):
@@ -1018,7 +1048,7 @@ class DockApp(QMainWindow):
                         if window_title.strip() != '':
                             # 尝试优雅地关闭窗口
                             win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-                            print(f"已发送关闭命令到窗口: {window_title}")
+                            log.info(f"已发送关闭命令到窗口: {window_title}")
                             return False  # 找到并处理了窗口，停止枚举
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     return True  # 继续枚举其他窗口
@@ -1028,7 +1058,7 @@ class DockApp(QMainWindow):
             # 延迟检查进程状态
             QTimer.singleShot(1000, self.check_running_processes)
         except Exception as e:
-            print(f"关闭窗口时出错: {e}")
+            log.error(f"关闭窗口时出错: {e}")
 
     def remove_app(self, app_data):
         reply = QMessageBox.question(
@@ -1085,9 +1115,12 @@ class DockApp(QMainWindow):
         )
         
         if file_path:
-            app_data['icon'] = file_path
-            self.save_settings()
-            self.update_app_buttons()
+            if os.path.exists(file_path):
+                app_data['icon'] = file_path
+                self.save_settings()
+                self.update_app_buttons()
+            else:
+                QMessageBox.warning(self, "错误", "选择的图标文件不存在")
 
     def open_settings(self):
         """打开设置对话框"""
@@ -1110,14 +1143,12 @@ class DockApp(QMainWindow):
                             pass
             else:
                 self.apps = []
-                print(f"配置文件 {self.settings_file} 不存在，将使用默认设置")
+                log.warning(f"配置文件 {self.settings_file} 不存在，将使用默认设置")
 
             # 确保加载设置后更新应用按钮
             self.update_app_buttons()
         except Exception as e:
-            print(f"加载配置文件 {self.settings_file} 时出错: {e}")
-            import traceback
-            traceback.print_exc()
+            log.exception(f"加载配置文件 {self.settings_file} 时出错")
             self.apps = []  # 出错时使用默认设置
             self.update_app_buttons()
 
@@ -1132,11 +1163,9 @@ class DockApp(QMainWindow):
 
             with open(self.settings_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
-            print(f"配置已成功保存到 {self.settings_file}")
+            log.info(f"配置已成功保存到 {self.settings_file}")
         except Exception as e:
-            print(f"保存配置文件 {self.settings_file} 时出错: {e}")
-            import traceback
-            traceback.print_exc()
+            log.exception(f"保存配置文件 {self.settings_file} 时出错")
 
     def show_menu(self, pos):
         """显示菜单按钮的菜单"""
@@ -1200,6 +1229,10 @@ class DockApp(QMainWindow):
     
 
     
+
+    
+
+    
     def exit_app(self):
         """清理资源并退出应用"""
         try:
@@ -1221,7 +1254,7 @@ class DockApp(QMainWindow):
                     # 解除事件过滤器
                     self.wallpaper_window.removeEventFilter(self.wallpaper_window)
                 except Exception as e:
-                    print(f"关闭壁纸窗口时出错: {e}")
+                    log.error(f"关闭壁纸窗口时出错: {e}")
             
             # 停止托盘图标
             if hasattr(self, 'tray_icon') and self.tray_icon:
@@ -1234,11 +1267,11 @@ class DockApp(QMainWindow):
             # 重启explorer.exe
             goodbye_tray.hello()
             
-            print("应用程序已清理资源并退出")
+            log.info("应用程序已清理资源并退出")
             sys.exit(0)
             
         except Exception as e:
-            print(f"退出应用时出错: {e}")
+            log.error(f"退出应用时出错: {e}")
             # 重启explorer.exe
             goodbye_tray.hello()
             sys.exit(1)
@@ -1378,7 +1411,7 @@ class SettingsDialog(QDialog):
             if hasattr(self.parent, 'process_manager') and self.parent.process_manager:
                 self.parent.process_manager.set_except_processes(lines)
         except Exception as e:
-            print(f"应用排除列表时出错: {e}")
+            log.error(f"应用排除列表时出错: {e}")
         # 保存壁纸与其它设置到父窗口的配置文件
         if hasattr(self.parent, 'wallpaper_path'):
             self.parent.save_settings()
@@ -1395,6 +1428,11 @@ def main():
     
     dock = DockApp()
     dock.show()
+    
+    # 启动小黑条
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    xht_window = xht(script_dir, logger=log)
+    xht_window.show()
     
     sys.exit(app.exec())
 

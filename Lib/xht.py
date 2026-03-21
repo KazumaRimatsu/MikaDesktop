@@ -1,39 +1,31 @@
 import sys
-from PySide6.QtWidgets import QApplication, QWidget, QLabel, QHBoxLayout, QSystemTrayIcon, QMenu, QMessageBox, QMainWindow
+from PySide6.QtWidgets import QApplication, QWidget, QLabel, QHBoxLayout, QMessageBox
 from PySide6.QtGui import Qt, QColor, QPainter, QBrush, QIcon
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QPoint, QTimer, QTime, Property
 import os, subprocess, threading
 import platform
 
-from xht import API, Config
+import Lib.APIs as API
+import Lib.config_manager as Config
 import Lib.log_maker as log_maker
+
+import pygetwindow as gw
 
 #测试用
 #import random
 
-#Banner
-print(" __   ___    _ _______ ")
-print(" \\ \\ / / |  | |__   __|")
-print("  \\ V /| |__| |  | |   ")
-print("   > < |  __  |  | |   ")
-print("  / . \\| |  | |  | |   ")
-print(" /_/ \\_\\_|  |_|  |_|   ")
 
-log = log_maker.logger()
 
-log.info(f"""
-运行平台：{platform.system()}
-OS版本：{platform.release()}
-Python版本：{platform.python_version()}
-PID：{os.getpid()}""")
-if platform.system() == "Windows" or platform.system() == "Darwin":
-    import pygetwindow as gw
-elif platform.system() == "Linux":
-    from ewmh import ewmh
 
 class xht(QWidget):
-    def __init__(self, config_path):        
+    def __init__(self, config_path, logger:log_maker.logger=log_maker.logger()):        
         super().__init__()
+        global log
+        log=logger
+        log.info(f"""运行平台：{platform.system()}
+        OS版本：{platform.release()}
+        Python版本：{platform.python_version()}
+        PID：{os.getpid()}""")
         #先决条件
         sys.excepthook = self.handle_exception
         self.weather_api = API.WeatherAPI()
@@ -42,7 +34,6 @@ class xht(QWidget):
 
         #布局
         self.global_layout = None # 全局布局
-        self.ui_type  = "original" #预设UI种类
 
         #动画
         self.size_animation = QPropertyAnimation(self, b"size")  # 初始化尺寸动画
@@ -65,67 +56,28 @@ class xht(QWidget):
 
         #其他
         self.fullscreen_apps = self.config.get("auto_hide_apps")  # 全屏检测关键词列表
-        
-        # 添加系统托盘图标支持
-        self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon("res/icon/common.ico"))
-        self.tray_icon.setToolTip("小黑条-正常运行中")
-        self.tray_icon.activated.connect(self.handle_tray_activation)
-
-        # 加载样式表
-        self.setStyleSheet("""
-                           QLabel {
-                           color: white; 
-                           font-size: 18px; 
-                           font-weight: bold;
-                           }""")
-          
-        self.create_tray_menu()        
         self.initUI()
-
-    def create_tray_menu(self):
-        menu = QMenu()
-        restore_action = menu.addAction("显示/隐藏")
-        about_action = menu.addAction("关于")
-        quit_action = menu.addAction("退出")
-        
-        about_action.triggered.connect(self.show_about_window)
-        quit_action.triggered.connect(self.quit_app)
-        restore_action.triggered.connect(self.toggle)
-        
-        self.tray_icon.setContextMenu(menu)
-
-    def toggle(self):
-        if self.is_hidden:
-            log.info("事件：托盘图标点击，显示窗口")
-            self.show_with_animation()
-        else:
-            log.info("事件：托盘图标点击，隐藏窗口")
-            self.hide_with_animation()
-    def handle_tray_activation(self, reason):
-        return  
-
     def quit_app(self):
         log.info("程序退出")
         try:
-            subprocess.Popen(["taskkill", "/F", "/PID", str(os.getpid())])
-        except:
-            subprocess.Popen(["kill", str(os.getpid())])
+            self.close()
+        except Exception as e:
+            log.error(f"终止进程失败: {e}")
 
     def initUI(self):
         log.info("程序正在启动")
-        self.setMinimumSize(120, 16)
-        self.setMaximumSize(600, 400)
-        screen = QApplication.primaryScreen().availableGeometry()
+        self.setMinimumSize(180, 48)
+        self.setMaximumSize(900, 600)
+        screen = self.get_current_screen().availableGeometry()
 
         if self.windowpos == "L":
-            initial_x = -self.width()
+            initial_x = screen.x() - self.minimumWidth()
         elif self.windowpos == "R":
-            initial_x = screen.width()
+            initial_x = screen.x() + screen.width()
         else:
-            initial_x = (screen.width() - self.width()) // 2
+            initial_x = screen.x() + (screen.width() - self.minimumWidth()) // 2
 
-        self.setGeometry(initial_x, self.edge_height, 120, 16)
+        self.setGeometry(initial_x, self.edge_height, self.minimumWidth(), self.minimumHeight())
 
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
         self.setWindowFlags(flags)
@@ -135,21 +87,20 @@ class xht(QWidget):
         self.original_ui()
         threading.Thread(target=self.update_weather).start()
         self.reg_timers()
-        self.tray_icon.show()
 
     def showEvent(self, event):
         super().showEvent(event)
         self.update_position()
         
-        screen = QApplication.primaryScreen().availableGeometry()
+        screen = self.get_current_screen().availableGeometry()
         current_pos = self.pos()
         
         if self.windowpos == "L":
-            initial_pos = QPoint(-self.width(), current_pos.y())
+            initial_pos = QPoint(screen.x() - self.width(), current_pos.y())
         elif self.windowpos == "R":
-            initial_pos = QPoint(screen.width(), current_pos.y())
+            initial_pos = QPoint(screen.x() + screen.width(), current_pos.y())
         else:  
-            initial_pos = QPoint(current_pos.x(), -self.height())
+            initial_pos = QPoint(current_pos.x(), screen.y() - self.height())
         
         self.position_animation.setDuration(250)
         self.position_animation.setStartValue(initial_pos)
@@ -193,31 +144,23 @@ class xht(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(QBrush(self.background_color))
         painter.setPen(Qt.PenStyle.NoPen)
-        if platform.system() == "Windows":
-            painter.drawRoundedRect(self.rect(), 24, 24)
-        if platform.system() == "Linux":
-            painter.drawRoundedRect(self.rect(), 24, 24)
-        if platform.system() == "Darwin":
-            painter.drawRoundedRect(self.rect(), 32, 32)
+        painter.drawRoundedRect(self.rect(), 24, 24)
 
     def update_time(self):
-        if self.ui_type  == "original":
             self.current_time = QTime.currentTime().toString("hh:mm")
-            if  self.ui_type == "original":
-                self.time_label.setText(self.current_time)
-                #self.time_label.setText(str(random.randint(781391,1145141919810)))
-                self.set_size()
+            self.time_label.setText(self.current_time)
+            #self.time_label.setText(str(random.randint(781391,1145141919810)))
+            self.set_size()
 
     def update_weather(self):
-        if self.ui_type  == "original":
             weather = self.weather_api.GetWeather()
             if not weather == 900:
-                self.weather_label.setStyleSheet("color: white;")
-                self.weather_label.setText(f"  {weather.get('weather')} {str(weather['temperature'])}{weather['unit']}")
+                self.weather_label.setStyleSheet("color: white;  font-size: 16px;font-weight: bold;")
+                self.weather_label.setText(f" {weather.get('weather')} {str(weather['temperature'])}{weather['unit']} ")
                 log.info(f"{weather['region']}的天气数据更新成功")
             else:
-                self.weather_label.setStyleSheet("color: red;")
-                self.weather_label.setText(f"天气获取失败")
+                self.weather_label.setStyleSheet("color: red;  font-size: 16px;font-weight: bold;")
+                self.weather_label.setText(f" 天气获取失败 ")
                 log.error(f"天气获取失败")
 
     def get_current_screen(self):
@@ -232,11 +175,11 @@ class xht(QWidget):
         # 获取当前所在屏幕的可用区域
         screen = self.get_current_screen().availableGeometry()
         if self.windowpos == "L":
-            target_x = self.horizontal_edge_margin  # 使用统一的水平边距
+            target_x = screen.x() + self.horizontal_edge_margin  # 使用统一的水平边距
         elif self.windowpos == "R":
-            target_x = (screen.width() - self.width()) - self.horizontal_edge_margin  # 右侧边距
+            target_x = screen.x() + (screen.width() - self.width()) - self.horizontal_edge_margin  # 右侧边距
         else:
-            target_x = (screen.width() - self.width()) // 2
+            target_x = screen.x() + (screen.width() - self.width()) // 2
         current_y = self.y()
         current_pos = self.pos()
         target_pos = QPoint(target_x, current_y)
@@ -274,12 +217,12 @@ class xht(QWidget):
         self.size_animation.start()
 
     def original_ui(self):
-        log.info("UI模式切换：original")
-        self.ui_type = "original"
         self.time_label = QLabel(self)
+        self.time_label.setStyleSheet("color: white; font-size: 16px;font-weight: bold;")
         self.time_label.setText(QTime.currentTime().toString("hh:mm"))
         self.weather_label = QLabel(self)
-        self.weather_label.setText("获取信息中")
+        self.weather_label.setStyleSheet("color: white; font-size: 16px;font-weight: bold;")
+        self.weather_label.setText("获取信息中 ")
         self.weather_label.installEventFilter(self)
         
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -290,15 +233,6 @@ class xht(QWidget):
         self.global_layout.addWidget(self.weather_label)
 
         self.setLayout(self.global_layout)
-        self.set_size()
-    def html_ui(self):
-        log.info("UI模式切换：html")
-        self.ui_type = "html"
-        self.original_ui()
-        self.html_text = QLabel(self)
-        self.html_text.setText("<html><head><style>body { color: white; font-size: 14px; }</style></head><body>这是HTML模式的文本</body></html>")
-        self.html_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.global_layout.addWidget(self.html_text)
         self.set_size()
 
     def mousePressEvent(self, event):
@@ -326,14 +260,14 @@ class xht(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.is_dragging:
-            screen = QApplication.primaryScreen().availableGeometry()
+            screen = self.get_current_screen().availableGeometry()
             screen_width = screen.width()
             window_center = self.pos().x() + self.width() / 2
 
             # 根据窗口中心相对于屏幕宽度的比例划分区域
-            if window_center < screen_width * 0.30:
+            if window_center < screen.x() + screen_width * 0.30:
                 self.windowpos = "L"  
-            elif window_center > screen_width * 0.70:
+            elif window_center > screen.x() + screen_width * 0.70:
                 self.windowpos = "R"  
             else:
                 self.windowpos = "M"  
@@ -362,18 +296,18 @@ class xht(QWidget):
 
         if self.windowpos == "L":
             # 从左侧隐藏位置开始，移动到正常位置
-            initial_pos = QPoint(-self.width() + self.edge_height, current_pos.y())
-            target_pos = QPoint(self.horizontal_edge_margin, window_y)
+            initial_pos = QPoint(screen.x() - self.width() + self.edge_height, current_pos.y())
+            target_pos = QPoint(screen.x() + self.horizontal_edge_margin, window_y)
         elif self.windowpos == "R":
             screen_width = screen.width()
-            screen_width_minus_margin = screen_width - self.width() - self.horizontal_edge_margin
+            screen_width_minus_margin = screen.x() + screen_width - self.width() - self.horizontal_edge_margin
             # 从右侧隐藏位置开始，移动到正常位置
-            initial_pos = QPoint(screen_width - self.edge_height, current_pos.y())
+            initial_pos = QPoint(screen.x() + screen_width - self.edge_height, current_pos.y())
             target_pos = QPoint(screen_width_minus_margin, window_y)
         else:
             # 垂直方向处理保持不变
-            initial_pos = QPoint(current_pos.x(), -self.height())
-            target_pos = QPoint(current_pos.x(), self.edge_height)
+            initial_pos = QPoint(current_pos.x(), screen.y() - self.height())
+            target_pos = QPoint(current_pos.x(), screen.y() + self.edge_height)
 
         if not self.show_animation:
             self.show_animation = QPropertyAnimation(self, b"pos", self)
@@ -396,15 +330,15 @@ class xht(QWidget):
         
         self.is_hiding = True
         current_pos = self.pos()
-        screen = QApplication.primaryScreen().availableGeometry()
+        screen = self.get_current_screen().availableGeometry()
         
         if self.windowpos in ["L", "R"]:
             if self.windowpos == "L":
                 # 保留edge_height宽度可见
-                target_x = 0 - (self.width() - self.edge_height)
+                target_x = screen.x() - (self.width() - self.edge_height)
             else:
                 # 保留edge_height宽度可见
-                target_x = screen.width() - self.edge_height
+                target_x = screen.x() + screen.width() - self.edge_height
                 
             target_pos = QPoint(target_x, current_pos.y())
         else:
@@ -426,44 +360,37 @@ class xht(QWidget):
         self.hide_animation.finished.connect(on_finished)
         self.hide_animation.start()
 
+    def toggle(self):
+        if self.is_hidden:
+            self.show_with_animation()
+        else:
+            self.hide_with_animation()
+
     def closeEvent(self, event):
         event.ignore()  # 忽略关闭事件
 
     def fcd(self):
         try:
-            if platform.system() == "Linux":
-                    try:
-                        ewmh_obj = ewmh.EWMH()
-                        active_window = ewmh_obj.getActiveWindow()
-                        if active_window:
-                            self.title = ewmh_obj.getWmName(win=active_window)
-                        else:
-                            self.title = ""
-                    except Exception as e:
-                        log.warning(f"Linux 窗口检测异常: {str(e)}")
-                        self.title = ""
-            else:
-                active_window = gw.getActiveWindow()
-                if not active_window:
-                    return
-                try:
-                    self.title = active_window.title
-                except AttributeError:
-                    self.title = ""
+            active_window = gw.getActiveWindow()
+            if not active_window:
+                return
+            try:
+                self.title = active_window.title
+            except AttributeError:
+                self.title = ""
         except Exception as e:
             log.warning(f"窗口检测异常: {str(e)}")
 
 
     def refresh(self, config_path):
         """刷新窗口"""
-        if self.ui_type == "original":
-            self.config = Config.load_config(config_path)
-            self.edge_height = self.config.get("edge_height")  # 边缘
-            self.horizontal_edge_margin = self.config.get("horizontal_edge_margin")  # 水平方向边距
-            self.windowpos = self.config.get("windowpos")  # 窗口位置
-            self.drag_threshold = self.config.get("drag_threshold")  # 拖动触发阈值
-            self.fullscreen_apps = self.config.get("auto_hide_apps")
-            self.update_position()
-            self.set_size()
-            self.update_time()
-            self.update_weather()
+        self.config = Config.load_config(config_path)
+        self.edge_height = self.config.get("edge_height")  # 边缘
+        self.horizontal_edge_margin = self.config.get("horizontal_edge_margin")  # 水平方向边距
+        self.windowpos = self.config.get("windowpos")  # 窗口位置
+        self.drag_threshold = self.config.get("drag_threshold")  # 拖动触发阈值
+        self.fullscreen_apps = self.config.get("auto_hide_apps")
+        self.update_position()
+        self.set_size()
+        self.update_time()
+        self.update_weather()

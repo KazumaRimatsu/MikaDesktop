@@ -24,7 +24,7 @@ def compose_on_template(image_data: Union[bytes, str, Image.Image],
 	"""
 	# 转换为PIL图像
 	src = _to_pil(image_data)
-	src = src.resize((128,128), Image.LANCZOS)
+	src = src.resize((160,160), Image.LANCZOS)
 
 	# 获取模板路径
 	if template_path is None:

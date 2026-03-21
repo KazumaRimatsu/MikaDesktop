@@ -1,23 +1,24 @@
 from loguru import logger as log
 import datetime
-import sys
 
 
 
 class logger:
+    _initialized = False
+    
     def __init__(self):
-        log.add(f"log/{datetime.datetime.now().strftime('%Y-%m-%d')}.log")
-        log.add(sys.stderr, level="DEBUG")
+        if not logger._initialized:
+            # 只添加文件处理器，loguru默认已经有stderr处理器了
+            log.add(f"log/{datetime.datetime.now().strftime('%Y-%m-%d')}.log")
+            logger._initialized = True
 
-    def debug(self, msg):
-        log.debug(msg)
-    def info(self, msg):
-        log.info(msg)
-    def warning(self, msg):
-        log.warning(msg)
-    def error(self, msg):
-        log.error(msg)
-    def debug(self, msg):
-        log.debug(msg)
-    def critical(self, msg):
-        log.critical(msg)
+    def debug(self, msg, **kwargs):
+        log.debug(msg, **kwargs)
+    def info(self, msg, **kwargs):
+        log.info(msg, **kwargs)
+    def warning(self, msg, **kwargs):
+        log.warning(msg, **kwargs)
+    def error(self, msg, **kwargs):
+        log.error(msg, **kwargs)
+    def critical(self, msg, **kwargs):
+        log.critical(msg, **kwargs)

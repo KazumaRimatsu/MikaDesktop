@@ -1,6 +1,6 @@
 import json
 import os
-from .. import log_maker
+from . import log_maker
 
 log = log_maker.logger()
 
@@ -18,7 +18,7 @@ def check(config_path):
     if not os.path.exists(config_file):
         with open(config_file, "w") as f:
             json.dump(DEFAULT_CONFIG, f, indent=4)
-        log.warn("配置文件不存在，已创建默认配置文件")
+        log.warning("配置文件不存在，已创建默认配置文件")
         return
     else:
         return    
