@@ -3,6 +3,7 @@ from . import custom_ui
 from . import process_manager
 from . import log_maker
 from . import config_manager
-from . import xht
 from . import APIs
 from . import MakeAppIcon
+from . import notification_system
+from . import escape_accidental_touch

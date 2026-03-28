@@ -1,14 +1,13 @@
-import ctypes
-import json
+import gc
 import os
 import sys
-from typing import Dict, List, Optional, Any
+import threading
+from typing import Dict, List, Any
 
 import psutil
 import win32con
 import win32gui
 import win32process
-import win32api
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
@@ -18,9 +17,11 @@ from win32com.shell import shell  # type: ignore
 
 from Lib.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
 from Lib.process_manager import ProcessManager
+import Lib.notification_system
 import Lib.goodbye_tray as goodbye_tray
-from Lib.xht import xht
 import Lib.log_maker as log_maker
+import Lib.config_manager as Config
+import Lib.escape_accidental_touch as escape_accidental_touch
 
 log = log_maker.logger()
 
@@ -127,7 +128,8 @@ class DockApp(QMainWindow):
         self.process_manager = ProcessManager()
         self.geometry_anim = None
         
-
+        # 通知系统
+        self.notification_manager = None
         
         self.init_ui()
         self.load_settings()
@@ -136,8 +138,30 @@ class DockApp(QMainWindow):
         self.setup_process_monitoring()
         # Position the window at center horizontally and 20 pixels from bottom
         self.update_window_position()
+        
+        self.start_accidental_touch()
+        
+        # 启动通知系统
+        self.start_notification_system()
 
         self.destroyed.connect(self.exit_app)
+
+    def start_notification_system(self):
+        try:
+            manager = Lib.notification_system.NotificationManager()
+            if manager.start():
+                return manager
+            else:
+                return None
+        except Exception as e:
+            log.error(f"启动通知系统失败: {e}")
+    
+    def start_accidental_touch(self):
+        self.escape_accidental_touch = escape_accidental_touch
+        try:
+            threading.Thread(target=self.escape_accidental_touch.start).start()
+        except Exception as e:
+            log.error(f"启动防止误触失败: {e}")
 
     def eventFilter(self, obj, event):
         """过滤键盘事件，屏蔽关闭窗口相关的快捷键"""
@@ -1130,21 +1154,24 @@ class DockApp(QMainWindow):
 
     def load_settings(self):
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    self.apps = settings.get('apps', [])
-                    # 加载 ProcessManager 的排除进程设置（如存在）
-                    except_list = settings.get('except_processes', [])
-                    if except_list and hasattr(self, 'process_manager') and self.process_manager:
-                        try:
-                            self.process_manager.set_except_processes(except_list)
-                        except Exception:
-                            pass
-            else:
-                self.apps = []
-                log.warning(f"配置文件 {self.settings_file} 不存在，将使用默认设置")
-
+            settings = Config.load_config(self.settings_file)
+            # 从 dock 配置部分获取数据
+            dock_config = settings.get('dock', {})
+            self.apps = dock_config.get('apps', [])
+            
+            # 加载 ProcessManager 的排除进程设置（如存在）
+            except_list = dock_config.get('except_processes', [])
+            if except_list and hasattr(self, 'process_manager') and self.process_manager:
+                try:
+                    self.process_manager.set_except_processes(except_list)
+                except Exception:
+                    pass
+            
+            # 加载壁纸路径（如存在） - 支持旧格式（顶层）和新格式（dock 下）
+            wallpaper_path = dock_config.get('wallpaper', settings.get('wallpaper', ''))
+            if wallpaper_path and os.path.exists(wallpaper_path):
+                self.wallpaper_path = wallpaper_path
+            
             # 确保加载设置后更新应用按钮
             self.update_app_buttons()
         except Exception as e:
@@ -1155,15 +1182,17 @@ class DockApp(QMainWindow):
     def save_settings(self):
         try:
             settings = {
-                'apps': self.apps,
-                'wallpaper': getattr(self, 'wallpaper_path', ''),  # 保存壁纸路径
-                # 将 ProcessManager 的排除列表保存到配置
-                'except_processes': getattr(self.process_manager, 'except_processes', [])
+                'dock': {
+                    'apps': self.apps,
+                    'wallpaper': getattr(self, 'wallpaper_path', ''),  # 保存壁纸路径
+                    # 将 ProcessManager 的排除列表保存到配置
+                    'except_processes': getattr(self.process_manager, 'except_processes', [])
+                }
             }
-
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, ensure_ascii=False, indent=2)
-            log.info(f"配置已成功保存到 {self.settings_file}")
+            
+            success = Config.save_config(self.settings_file, settings)
+            if not success:
+                log.error(f"保存配置文件到 {self.settings_file} 失败")
         except Exception as e:
             log.exception(f"保存配置文件 {self.settings_file} 时出错")
 
@@ -1222,20 +1251,23 @@ class DockApp(QMainWindow):
         except Exception as e:
             self.handle_error(f"显示关机对话框失败: {e}")
 
-
-
-
-
-    
-
-    
-
-    
-
-    
     def exit_app(self):
         """清理资源并退出应用"""
+        self.save_settings()
+        gc.collect()
         try:
+
+            # 停止通知系统
+            if hasattr(self, 'notification_manager') and self.notification_manager:
+                try:
+                    self.notification_manager.stop()
+                    log.info("通知系统已停止")
+                except Exception as e:
+                    log.error(f"停止通知系统时出错: {e}")
+
+            if self.escape_accidental_touch:
+                self.escape_accidental_touch.start(stop_thread=True)
+            
             # 停止进程监控定时器
             if hasattr(self, 'process_timer') and self.process_timer:
                 self.process_timer.stop()
@@ -1243,27 +1275,7 @@ class DockApp(QMainWindow):
             # 停止全局快捷键管理器
             if hasattr(self, 'hotkey_manager') and self.hotkey_manager:
                 self.hotkey_manager.stop()
-            
 
-
-            
-            # 停止壁纸窗口
-            if hasattr(self, 'wallpaper_window') and self.wallpaper_window:
-                try:
-                    self.wallpaper_window.close()
-                    # 解除事件过滤器
-                    self.wallpaper_window.removeEventFilter(self.wallpaper_window)
-                except Exception as e:
-                    log.error(f"关闭壁纸窗口时出错: {e}")
-            
-            # 停止托盘图标
-            if hasattr(self, 'tray_icon') and self.tray_icon:
-                self.tray_icon.hide()
-                self.tray_icon = None
-            
-            # 保存设置
-            self.save_settings()
-            
             # 重启explorer.exe
             goodbye_tray.hello()
             
@@ -1274,7 +1286,7 @@ class DockApp(QMainWindow):
             log.error(f"退出应用时出错: {e}")
             # 重启explorer.exe
             goodbye_tray.hello()
-            sys.exit(1)
+            os._exit(0)
 
     def closeEvent(self, event):
         event.ignore()  # 忽略关闭事件，因为应用程序不应该真正退出
@@ -1428,12 +1440,6 @@ def main():
     
     dock = DockApp()
     dock.show()
-    
-    # 启动小黑条
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    xht_window = xht(script_dir, logger=log)
-    xht_window.show()
-    
     sys.exit(app.exec())
 
 

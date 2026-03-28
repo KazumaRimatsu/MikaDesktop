@@ -5,14 +5,24 @@ from . import log_maker
 log = log_maker.logger()
 
 DEFAULT_CONFIG = {
-    "edge_height": 4,
-    "horizontal_edge_margin": 4,
-    "drag_threshold": 8,
-    "windowpos": "M",
-    "auto_hide_apps": ["PowerPoint ", "WPS Presentation Slide "]    
+  "dock":{
+    "apps": [],
+    "except_processes": [
+      "shellexperiencehost.exe",
+      "applicationframehost.exe",
+      "startmenuexperiencehost.exe",
+      "widgets.exe",
+      "widgetservice.exe",
+      "python.exe",
+      "wetype_server.exe",
+      "wetype_service.exe",
+      "wetype_renderer.exe",
+      "systemsettings.exe"
+    ]}
 }
+
 def check(config_path):
-    config_file = os.path.join(config_path, "appsettings.json")
+    config_file = os.path.join(config_path, "settings.json")
     if not os.path.exists(config_path):
         os.makedirs(config_path)
     if not os.path.exists(config_file):
@@ -23,13 +33,41 @@ def check(config_path):
     else:
         return    
 
-def load_config(path):
-    check(path)
-    config_file = os.path.join(path, "appsettings.json")
+def load_config(file_path):
+    """加载配置文件"""
     try:
-        with open(config_file, "r") as f:
-            config = json.load(f)
-        return config
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # 确保所有必要的键都存在
+            for key, default_value in DEFAULT_CONFIG.items():
+                if key not in config:
+                    config[key] = default_value
+            
+            return config
+        else:
+            log.warning(f"Dock配置文件 {file_path} 不存在，将使用默认配置")
+            return DEFAULT_CONFIG.copy()
     except Exception as e:
-        log.error(f"加载配置文件失败: {e}")
-        return {}
+        log.error(f"加载Dock配置文件 {file_path} 失败: {e}")
+        return DEFAULT_CONFIG.copy()
+
+def save_config(file_path, config):
+    """保存配置文件"""
+    try:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # 合并默认值以确保完整性
+        merged_config = DEFAULT_CONFIG.copy()
+        merged_config.update(config)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(merged_config, f, ensure_ascii=False, indent=2)
+        
+        log.info(f"Dock配置已成功保存到 {file_path}")
+        return True
+    except Exception as e:
+        log.error(f"保存Dock配置文件 {file_path} 失败: {e}")
+        return False

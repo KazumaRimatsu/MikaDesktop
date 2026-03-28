@@ -1,5 +1,5 @@
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel, QMessageBox)
 
