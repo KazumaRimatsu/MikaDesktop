@@ -1,8 +1,9 @@
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel, QMessageBox)
+from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel)
 from BlurWindow.blurWindow import GlobalBlur
+from Lib.win32_omessagebox import question, Yes, No
 
 # 添加Windows API导入，用于输入法切换
 import win32con
@@ -358,15 +359,15 @@ class ShutdownDialog(QDialog):
 			"hibernate": "休眠"
 		}
 
-		reply = QMessageBox.question(
+		reply = question(
 			self,
 			"确认操作",
 			f"确定要执行{action_names[action]}操作吗？\n\n请确保已保存所有工作！",
-			QMessageBox.Yes | QMessageBox.No,
-			QMessageBox.No
+			Yes | No,
+			1  # 默认按钮为第二个（No）
 		)
 
-		if reply == QMessageBox.Yes:
+		if reply == Yes:
 			self.selected_action = action
 			self.accept()
 
@@ -384,7 +385,7 @@ class GlobalHotkeyManager(QObject):
 		self.shortcuts = []  # 存储快捷键对象
 		self.active_shortcut = None  # 当前激活的快捷键
 		self.hotkey_combo = None  # 记录使用的快捷键组合
-		self.wallpaper_window = None  # 壁纸窗口引用
+
 		self.ime_notification = None  # 输入法切换提示界面
 		
 	def start(self):

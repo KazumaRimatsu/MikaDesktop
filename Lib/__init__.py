@@ -4,7 +4,7 @@ from . import process_manager
 from . import log_maker
 from . import config_manager
 from . import APIs
-from . import MakeAppIcon
+from . import make_app_icon
+from . import threads
 from .features import notification_system
 from .features import escape_accidental_touch
-from . import threads

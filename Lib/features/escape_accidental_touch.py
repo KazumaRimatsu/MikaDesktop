@@ -4,8 +4,7 @@ import time
 import threading
 import requests
 from typing import Optional
-from ..threads.lifecycle import ThreadBase, ThreadConfig, ThreadState, ThreadError
-
+from PySide6.QtCore import QThread, Signal
 
 class DeviceData:
     def __init__(self):
@@ -13,19 +12,16 @@ class DeviceData:
         self.screen_width = user32.GetSystemMetrics(0)
         self.redline_x = [self.screen_width * 0.05, self.screen_width * 0.95]
 
+class Info:
+    NAME = "AccidentalTouchMonitor"
 
-class Monitor(ThreadBase):
-    def __init__(self, device_data: DeviceData, max_data_count: int = 1024, config: Optional[ThreadConfig] = None):
-        # 创建简化配置（如果未提供）
-        if config is None:
-            config = ThreadConfig(
-                name="AccidentalTouchMonitor",
-                daemon=True,
-                auto_start=False
-            )
-        
-        # 初始化基类
-        super().__init__(config)
+
+class Monitor(QThread):
+    # 信号定义
+    errorOccurred = Signal(str)  # 错误消息信号
+    
+    def __init__(self, device_data: DeviceData, max_data_count: int = 1024):
+        super().__init__()
         
         # 原有成员初始化
         self.stop_thread = False
@@ -36,78 +32,78 @@ class Monitor(ThreadBase):
         self.cache_data = []
         self.clicks_doubted = []
         
+        # 线程控制
+        self._paused = False
+        self._pause_lock = threading.Lock()
+        self._stop_requested = False
+        
         # 子线程引用
         self.listener: Optional[mouse.Listener] = None
         self.warning_thread: Optional[threading.Thread] = None
+        
+        # 线程名称
+        self._name = "AccidentalTouchMonitor"
+    # 线程控制方法
+    def get_name(self) -> str:
+        """获取线程名称"""
+        return self._name
     
-    def initialize(self) -> bool:
-        """初始化误触检测资源"""
+    def pause(self):
+        """暂停线程"""
+        with self._pause_lock:
+            self._paused = True
+    
+    def resume(self):
+        """恢复线程"""
+        with self._pause_lock:
+            self._paused = False
+    
+    def is_paused(self) -> bool:
+        """检查线程是否暂停"""
+        with self._pause_lock:
+            return self._paused
+    
+
+    def quit(self):
+        """停止线程"""
+        self._stop_requested = True
+        self.stop_thread = True
+        super().quit()
+    
+
+    def run(self):
+        """误触检测主循环"""
+        print(f"误触检测开始运行: {self.get_name()}")
+        
         try:
-            print(f"初始化误触检测: {self.get_name()}")
-            
-            # 创建鼠标监听器
+            # 初始化资源
             self.listener = mouse.Listener(on_click=self.record)
-            
-            # 创建警告线程
             self.warning_thread = threading.Thread(
                 target=self.send_warning,
                 name=f"{self.get_name()}_WarningThread",
                 daemon=True
             )
             
-            print(f"误触检测初始化完成: {self.get_name()}")
-            return True
-            
-        except Exception as e:
-            error = ThreadError(
-                self.get_name(),
-                f"误触检测初始化失败: {str(e)}",
-                e if isinstance(e, Exception) else None
-            )
-            self._handle_error(error)
-            return False
-    
-    def run(self):
-        """误触检测主循环"""
-        print(f"误触检测开始运行: {self.get_name()}")
-        
-        try:
             # 启动鼠标监听器
-            if self.listener:
-                self.listener.start()
-                print(f"鼠标监听器已启动: {self.get_name()}")
+            self.listener.start()
+            print(f"鼠标监听器已启动: {self.get_name()}")
             
             # 启动警告线程
-            if self.warning_thread:
-                self.warning_thread.start()
-                print(f"警告线程已启动: {self.get_name()}")
+            self.warning_thread.start()
+            print(f"警告线程已启动: {self.get_name()}")
             
             # 主循环：等待停止事件
-            while not self._should_stop():
+            while not self.isInterruptionRequested():
                 # 检查是否暂停
-                if not self._wait_if_paused():
-                    break
+                if self.is_paused():
+                    time.sleep(0.1)
+                    continue
                 
                 # 短暂睡眠以避免忙等待
                 time.sleep(1.0)
             
-            print(f"误触检测运行结束: {self.get_name()}")
-            
-        except Exception as e:
-            error = ThreadError(
-                self.get_name(),
-                f"误触检测运行时发生未捕获异常: {str(e)}",
-                e if isinstance(e, Exception) else None
-            )
-            self._handle_error(error)
-            raise
-    
-    def cleanup(self):
-        """清理误触检测资源"""
-        try:
+            # 清理资源
             print(f"清理误触检测资源: {self.get_name()}")
-            
-            # 设置停止标志
             self.stop_thread = True
             
             # 停止鼠标监听器
@@ -127,21 +123,22 @@ class Monitor(ThreadBase):
             self.clicks_doubted.clear()
             
             print(f"误触检测资源清理完成: {self.get_name()}")
+            print(f"误触检测运行结束: {self.get_name()}")
             
         except Exception as e:
-            error = ThreadError(
-                self.get_name(),
-                f"清理误触检测资源时发生错误: {str(e)}",
-                e if isinstance(e, Exception) else None
-            )
-            self._handle_error(error)
+            error_msg = f"误触检测运行时发生未捕获异常: {str(e)}"
+            print(error_msg)
+            self.errorOccurred.emit(error_msg)
+            raise
+    
+
     
     def send_warning(self):
         """发送误触警告（在独立线程中运行）"""
         self.stop_thread = False
         warning_count = 0
         
-        while not self.stop_thread and not self._should_stop():
+        while not self.stop_thread and not self.isInterruptionRequested():
             try:
                 # 检查是否暂停
                 if self.is_paused():
@@ -196,14 +193,6 @@ class Monitor(ThreadBase):
     
 
     
-    # 保持向后兼容的方法
-    def start(self):
-        """启动误触检测（兼容旧接口）"""
-        return super().start()
-    
-    def stop(self, timeout: float = 5.0):
-        """停止误触检测（兼容旧接口）"""
-        return super().stop(timeout=timeout)
 
 def start(max_data_count=1024, stop_thread=False):
     detector = DeviceData()
@@ -211,12 +200,13 @@ def start(max_data_count=1024, stop_thread=False):
     
     if stop_thread:
         # 如果设置了stop_thread参数，直接停止并返回
-        monitor.stop()
+        monitor.quit()
+        monitor.wait(5000)  # 等待5秒
         return monitor
     
     try:
         # 启动误触检测（非阻塞）
-        if monitor.start():
+        if monitor.start():  # 调用QThread的start方法
             print(f"误触检测已启动: {monitor.get_name()}")
             # 返回Monitor实例以便后续控制
             return monitor

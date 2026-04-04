@@ -63,7 +63,7 @@ def test_interaction_notification():
             "context": "请选择一个选项",
             "level": "default",
             "type": "interaction",
-            "choice": "确认&&取消&&稍后提醒",
+            "choice": ["确认","取消","稍后提醒"],
             "wait": "true"
         })
         print(f"响应状态码: {response.status_code}")

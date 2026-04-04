@@ -1,375 +1,287 @@
-"""
-简化的线程管理器
-提供线程创建、启动、暂停、恢复、终止和资源回收功能
-移除健康检查、自动重启等高级生命周期管理功能以解决程序无响应问题
-"""
-
+from PySide6.QtCore import QThread, QObject, Signal
+import uuid
 import threading
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Callable
+from datetime import datetime
 
-from .. import log_maker
-from .lifecycle import ThreadBase, ThreadState
+class ThreadState:
+    """线程状态枚举"""
+    CREATED = "created"     # 已注册
+    RUNNING = "running"     # 运行中
+    PAUSED = "paused"       # 已暂停
+    STOPPING = "stopping"   # 停止中
+    STOPPED = "stopped"     # 已停止
+    ERROR = "error"         # 错误状态
+    COMPLETED = "completed" # 已完成
 
-log = log_maker.logger()
+class ThreadPriority:
+    """线程优先级"""
+    LOW = -1    # 低优先级
+    NORMAL = 0  # 普通优先级
+    HIGH = 1    # 高优先级
 
+class ThreadInfo:
+    """线程信息类"""
+    def __init__(self, id: str, name: str, level: int, state: str, 
+                 created_time: datetime, worker: QThread):
+        self.id = id
+        self.name = name
+        self.level = level
+        self.state = state
+        self.created_time = created_time
+        self.worker = worker
+        self.start_time: Optional[datetime] = None
+        self.end_time: Optional[datetime] = None
+        self.error: Optional[str] = None
 
-class ThreadManager:
-    """简化的线程管理器"""
+class ThreadManager(QObject):
+    """改进的线程管理器"""
     
-    def __init__(self):
-        self._threads: Dict[str, ThreadBase] = {}
+    # 信号定义
+    thread_started = Signal(str, str)  # (thread_id, thread_name)
+    thread_stopped = Signal(str, str)  # (thread_id, thread_name)
+    thread_error = Signal(str, str, str)  # (thread_id, thread_name, error_message)
+    thread_state_changed = Signal(str, str, str)  # (thread_id, old_state, new_state)
+    
+    def __init__(self, max_threads: int = 16):
+        super().__init__()
+        self.max_threads = max_threads
+        self.threads: Dict[str, ThreadInfo] = {}
         self._lock = threading.RLock()
-        self._running = False  # 管理器是否正在运行（有线程在运行）
+        self._active_count = 0
     
-    def register_thread(self, thread: ThreadBase) -> bool:
-        """注册线程到管理器
+    def create(self, name: str, level: int = ThreadPriority.NORMAL, 
+               start_when_create: bool = False, worker: QThread = None) -> str:
+        """创建并注册线程"""
+        if level not in [ThreadPriority.LOW, ThreadPriority.NORMAL, ThreadPriority.HIGH]:
+            raise ValueError("level must be in [-1, 0, 1]")
+        if worker is None:
+            raise ValueError("worker must be provided")
         
-        Args:
-            thread: 要注册的线程实例
-            
-        Returns:
-            bool: 注册是否成功
-        """
         with self._lock:
-            thread_name = thread.get_name()
+            # 检查线程数量限制
+            if len(self.threads) >= self.max_threads:
+                raise RuntimeError(f"已达到最大线程数限制: {self.max_threads}")
             
-            if thread_name in self._threads:
-                log.warning(f"线程 '{thread_name}' 已注册，跳过重复注册")
-                return False
+            thread_id = str(uuid.uuid4())
+            created_time = datetime.now()
             
-            self._threads[thread_name] = thread
-            log.info(f"线程 '{thread_name}' 已注册到管理器")
-            return True
-    
-    def unregister_thread(self, thread_name: str) -> bool:
-        """从管理器注销线程
-        
-        Args:
-            thread_name: 线程名称
-            
-        Returns:
-            bool: 注销是否成功
-        """
-        with self._lock:
-            if thread_name not in self._threads:
-                log.warning(f"线程 '{thread_name}' 未注册，无法注销")
-                return False
-            
-            thread = self._threads[thread_name]
-            
-            # 停止线程（如果正在运行）
-            if thread.get_state() in [ThreadState.RUNNING, ThreadState.PAUSED]:
-                log.info(f"停止已注册的线程 '{thread_name}'")
-                thread.stop(timeout=3.0)
-            
-            del self._threads[thread_name]
-            log.info(f"线程 '{thread_name}' 已从管理器注销")
-            return True
-    
-    def start_all(self) -> bool:
-        """启动所有已注册的线程
-        
-        Returns:
-            bool: 是否所有线程都启动成功
-        """
-        with self._lock:
-            if self._running:
-                log.warning("线程管理器已在运行")
-                return False
-            
-            success = True
-            started_count = 0
-            
-            for thread_name, thread in self._threads.items():
-                try:
-                    if thread.start():
-                        started_count += 1
-                        log.info(f"线程 '{thread_name}' 启动成功")
-                    else:
-                        log.error(f"线程 '{thread_name}' 启动失败")
-                        success = False
-                except Exception as e:
-                    log.error(f"启动线程 '{thread_name}' 时发生异常: {e}")
-                    success = False
-            
-            if started_count > 0:
-                self._running = True
-                log.info(f"线程管理器已启动，共启动 {started_count}/{len(self._threads)} 个线程")
-            else:
-                log.warning("没有线程成功启动")
-            
-            return success
-    
-    def stop_all(self, timeout: float = 5.0) -> bool:
-        """停止所有已注册的线程
-        
-        Args:
-            timeout: 等待线程停止的超时时间（秒）
-            
-        Returns:
-            bool: 是否所有线程都停止成功
-        """
-        with self._lock:
-            if not self._running:
-                log.info("线程管理器未运行")
-                return True
-            
-            success = True
-            stopped_count = 0
-            
-            for thread_name, thread in self._threads.items():
-                try:
-                    if thread.stop(timeout=timeout):
-                        stopped_count += 1
-                        log.info(f"线程 '{thread_name}' 停止成功")
-                    else:
-                        log.error(f"线程 '{thread_name}' 停止失败")
-                        success = False
-                except Exception as e:
-                    log.error(f"停止线程 '{thread_name}' 时发生异常: {e}")
-                    success = False
-            
-            self._running = False
-            log.info(f"线程管理器已停止，共停止 {stopped_count}/{len(self._threads)} 个线程")
-            return success
-    
-    def pause_all(self) -> bool:
-        """暂停所有正在运行的线程
-        
-        Returns:
-            bool: 是否所有线程都暂停成功
-        """
-        with self._lock:
-            success = True
-            paused_count = 0
-            
-            for thread_name, thread in self._threads.items():
-                if thread.get_state() == ThreadState.RUNNING:
-                    try:
-                        if thread.pause():
-                            paused_count += 1
-                            log.info(f"线程 '{thread_name}' 暂停成功")
-                        else:
-                            log.error(f"线程 '{thread_name}' 暂停失败")
-                            success = False
-                    except Exception as e:
-                        log.error(f"暂停线程 '{thread_name}' 时发生异常: {e}")
-                        success = False
-            
-            log.info(f"已暂停 {paused_count} 个线程")
-            return success
-    
-    def resume_all(self) -> bool:
-        """恢复所有已暂停的线程
-        
-        Returns:
-            bool: 是否所有线程都恢复成功
-        """
-        with self._lock:
-            success = True
-            resumed_count = 0
-            
-            for thread_name, thread in self._threads.items():
-                if thread.get_state() == ThreadState.PAUSED:
-                    try:
-                        if thread.resume():
-                            resumed_count += 1
-                            log.info(f"线程 '{thread_name}' 恢复成功")
-                        else:
-                            log.error(f"线程 '{thread_name}' 恢复失败")
-                            success = False
-                    except Exception as e:
-                        log.error(f"恢复线程 '{thread_name}' 时发生异常: {e}")
-                        success = False
-            
-            log.info(f"已恢复 {resumed_count} 个线程")
-            return success
-    
-    def start_thread(self, thread_name: str) -> bool:
-        """启动指定线程
-        
-        Args:
-            thread_name: 线程名称
-            
-        Returns:
-            bool: 启动是否成功
-        """
-        with self._lock:
-            if thread_name not in self._threads:
-                log.error(f"线程 '{thread_name}' 未注册")
-                return False
-            
-            thread = self._threads[thread_name]
-            
-            try:
-                if thread.start():
-                    self._running = True
-                    log.info(f"线程 '{thread_name}' 启动成功")
-                    return True
-                else:
-                    log.error(f"线程 '{thread_name}' 启动失败")
-                    return False
-            except Exception as e:
-                log.error(f"启动线程 '{thread_name}' 时发生异常: {e}")
-                return False
-    
-    def stop_thread(self, thread_name: str, timeout: float = 5.0) -> bool:
-        """停止指定线程
-        
-        Args:
-            thread_name: 线程名称
-            timeout: 等待超时时间（秒）
-            
-        Returns:
-            bool: 停止是否成功
-        """
-        with self._lock:
-            if thread_name not in self._threads:
-                log.error(f"线程 '{thread_name}' 未注册")
-                return False
-            
-            thread = self._threads[thread_name]
-            
-            try:
-                if thread.stop(timeout=timeout):
-                    # 检查是否还有线程在运行
-                    self._update_running_state()
-                    log.info(f"线程 '{thread_name}' 停止成功")
-                    return True
-                else:
-                    log.error(f"线程 '{thread_name}' 停止失败")
-                    return False
-            except Exception as e:
-                log.error(f"停止线程 '{thread_name}' 时发生异常: {e}")
-                return False
-    
-    def pause_thread(self, thread_name: str) -> bool:
-        """暂停指定线程
-        
-        Args:
-            thread_name: 线程名称
-            
-        Returns:
-            bool: 暂停是否成功
-        """
-        with self._lock:
-            if thread_name not in self._threads:
-                log.error(f"线程 '{thread_name}' 未注册")
-                return False
-            
-            thread = self._threads[thread_name]
-            
-            try:
-                if thread.pause():
-                    log.info(f"线程 '{thread_name}' 暂停成功")
-                    return True
-                else:
-                    log.error(f"线程 '{thread_name}' 暂停失败")
-                    return False
-            except Exception as e:
-                log.error(f"暂停线程 '{thread_name}' 时发生异常: {e}")
-                return False
-    
-    def resume_thread(self, thread_name: str) -> bool:
-        """恢复指定线程
-        
-        Args:
-            thread_name: 线程名称
-            
-        Returns:
-            bool: 恢复是否成功
-        """
-        with self._lock:
-            if thread_name not in self._threads:
-                log.error(f"线程 '{thread_name}' 未注册")
-                return False
-            
-            thread = self._threads[thread_name]
-            
-            try:
-                if thread.resume():
-                    log.info(f"线程 '{thread_name}' 恢复成功")
-                    return True
-                else:
-                    log.error(f"线程 '{thread_name}' 恢复失败")
-                    return False
-            except Exception as e:
-                log.error(f"恢复线程 '{thread_name}' 时发生异常: {e}")
-                return False
-    
-    def get_thread(self, thread_name: str) -> Optional[ThreadBase]:
-        """获取指定线程实例
-        
-        Args:
-            thread_name: 线程名称
-            
-        Returns:
-            ThreadBase: 线程实例，如果未找到则返回None
-        """
-        with self._lock:
-            return self._threads.get(thread_name)
-    
-    def get_thread_state(self, thread_name: str) -> Optional[ThreadState]:
-        """获取指定线程状态
-        
-        Args:
-            thread_name: 线程名称
-            
-        Returns:
-            ThreadState: 线程状态，如果未找到则返回None
-        """
-        with self._lock:
-            if thread_name not in self._threads:
-                return None
-            
-            return self._threads[thread_name].get_state()
-    
-    def get_all_threads(self) -> Dict[str, ThreadBase]:
-        """获取所有已注册的线程
-        
-        Returns:
-            Dict[str, ThreadBase]: 线程名称到线程实例的映射
-        """
-        with self._lock:
-            return self._threads.copy()
-    
-    def is_running(self) -> bool:
-        """检查线程管理器是否正在运行"""
-        with self._lock:
-            return self._running
-    
-    def _update_running_state(self):
-        """更新运行状态（内部方法）"""
-        with self._lock:
-            self._running = any(
-                thread.get_state() in [ThreadState.RUNNING, ThreadState.PAUSED]
-                for thread in self._threads.values()
+            thread_info = ThreadInfo(
+                id=thread_id,
+                name=name,
+                level=level,
+                state=ThreadState.CREATED,
+                created_time=created_time,
+                worker=worker
             )
+            
+            self.threads[thread_id] = thread_info
+            
+            # 连接线程信号
+            worker.finished.connect(lambda: self._on_thread_finished(thread_id))
+            if hasattr(worker, 'errorOccurred'):
+                worker.errorOccurred.connect(lambda error: self._on_thread_error(thread_id, error))
+            
+            if start_when_create:
+                self.run(thread_id)
+            
+            return thread_id
     
-    def __enter__(self):
-        """上下文管理器入口"""
-        self.start_all()
-        return self
+    def run(self, thread_id: str) -> bool:
+        """启动线程"""
+        with self._lock:
+            if thread_id not in self.threads:
+                return False
+            
+            thread_info = self.threads[thread_id]
+            
+            if thread_info.state not in [ThreadState.CREATED, ThreadState.STOPPED, ThreadState.PAUSED]:
+                return False
+            
+            try:
+                old_state = thread_info.state
+                thread_info.state = ThreadState.RUNNING
+                thread_info.start_time = datetime.now()
+                thread_info.end_time = None
+                thread_info.error = None
+                
+                thread_info.worker.start()
+                self._active_count += 1
+                
+                self.thread_state_changed.emit(thread_id, old_state, ThreadState.RUNNING)
+                self.thread_started.emit(thread_id, thread_info.name)
+                
+                return True
+            except Exception as e:
+                thread_info.state = ThreadState.ERROR
+                thread_info.error = str(e)
+                self.thread_error.emit(thread_id, thread_info.name, str(e))
+                return False
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """上下文管理器出口"""
-        self.stop_all()
-
-
-# 全局线程管理器实例
-_global_thread_manager: Optional[ThreadManager] = None
-
-
-def get_global_thread_manager() -> ThreadManager:
-    """获取全局线程管理器实例（单例）"""
-    global _global_thread_manager
+    def stop(self, thread_id: str, wait: bool = True, timeout: int = 5000) -> bool:
+        """停止线程"""
+        with self._lock:
+            if thread_id not in self.threads:
+                return False
+            
+            thread_info = self.threads[thread_id]
+            
+            if thread_info.state not in [ThreadState.RUNNING, ThreadState.PAUSED]:
+                return False
+            
+            try:
+                old_state = thread_info.state
+                thread_info.state = ThreadState.STOPPING
+                
+                thread_info.worker.quit()
+                
+                if wait:
+                    if not thread_info.worker.wait(timeout):
+                        thread_info.worker.terminate()
+                
+                thread_info.state = ThreadState.STOPPED
+                thread_info.end_time = datetime.now()
+                self._active_count -= 1
+                
+                self.thread_state_changed.emit(thread_id, old_state, ThreadState.STOPPED)
+                self.thread_stopped.emit(thread_id, thread_info.name)
+                
+                return True
+            except Exception as e:
+                thread_info.state = ThreadState.ERROR
+                thread_info.error = str(e)
+                self.thread_error.emit(thread_id, thread_info.name, str(e))
+                return False
     
-    if _global_thread_manager is None:
-        _global_thread_manager = ThreadManager()
+    def pause(self, thread_id: str) -> bool:
+        """暂停线程（如果线程支持暂停功能）"""
+        with self._lock:
+            if thread_id not in self.threads:
+                return False
+            
+            thread_info = self.threads[thread_id]
+            
+            if thread_info.state != ThreadState.RUNNING:
+                return False
+            
+            # 这里需要线程对象实现暂停功能
+            if hasattr(thread_info.worker, 'pause'):
+                try:
+                    old_state = thread_info.state
+                    thread_info.worker.pause()
+                    thread_info.state = ThreadState.PAUSED
+                    
+                    self.thread_state_changed.emit(thread_id, old_state, ThreadState.PAUSED)
+                    return True
+                except Exception as e:
+                    thread_info.state = ThreadState.ERROR
+                    thread_info.error = str(e)
+                    self.thread_error.emit(thread_id, thread_info.name, str(e))
+                    return False
+            return False
     
-    return _global_thread_manager
-
-
-def create_thread_manager() -> ThreadManager:
-    """创建新的线程管理器实例"""
-    return ThreadManager()
+    def resume(self, thread_id: str) -> bool:
+        """恢复暂停的线程"""
+        with self._lock:
+            if thread_id not in self.threads:
+                return False
+            
+            thread_info = self.threads[thread_id]
+            
+            if thread_info.state != ThreadState.PAUSED:
+                return False
+            
+            if hasattr(thread_info.worker, 'resume'):
+                try:
+                    old_state = thread_info.state
+                    thread_info.worker.resume()
+                    thread_info.state = ThreadState.RUNNING
+                    
+                    self.thread_state_changed.emit(thread_id, old_state, ThreadState.RUNNING)
+                    return True
+                except Exception as e:
+                    thread_info.state = ThreadState.ERROR
+                    thread_info.error = str(e)
+                    self.thread_error.emit(thread_id, thread_info.name, str(e))
+                    return False
+            return False
+    
+    def destroy(self, thread_id: str) -> bool:
+        """销毁线程"""
+        with self._lock:
+            if thread_id not in self.threads:
+                return False
+            
+            thread_info = self.threads[thread_id]
+            
+            # 先停止线程
+            if thread_info.state in [ThreadState.RUNNING, ThreadState.PAUSED]:
+                self.stop(thread_id, wait=True)
+            
+            try:
+                thread_info.worker.deleteLater()
+                del self.threads[thread_id]
+                return True
+            except Exception as e:
+                return False
+    
+    def stop_all(self) -> None:
+        """停止所有线程"""
+        with self._lock:
+            for thread_id in list(self.threads.keys()):
+                self.stop(thread_id, wait=False)
+    
+    def get_thread_info(self, thread_id: str) -> Optional[ThreadInfo]:
+        """获取线程信息"""
+        with self._lock:
+            return self.threads.get(thread_id)
+    
+    def get_all_threads(self) -> List[ThreadInfo]:
+        """获取所有线程信息"""
+        with self._lock:
+            return list(self.threads.values())
+    
+    def get_threads_by_state(self, state: str) -> List[ThreadInfo]:
+        """按状态筛选线程"""
+        with self._lock:
+            return [info for info in self.threads.values() if info.state == state]
+    
+    def get_active_count(self) -> int:
+        """获取活跃线程数量"""
+        with self._lock:
+            return self._active_count
+    
+    def get_total_count(self) -> int:
+        """获取总线程数量"""
+        with self._lock:
+            return len(self.threads)
+    
+    def _on_thread_finished(self, thread_id: str) -> None:
+        """线程完成回调"""
+        with self._lock:
+            if thread_id in self.threads:
+                thread_info = self.threads[thread_id]
+                old_state = thread_info.state
+                
+                if thread_info.state == ThreadState.RUNNING:
+                    thread_info.state = ThreadState.COMPLETED
+                    thread_info.end_time = datetime.now()
+                    self._active_count -= 1
+                    
+                    self.thread_state_changed.emit(thread_id, old_state, ThreadState.COMPLETED)
+                    self.thread_stopped.emit(thread_id, thread_info.name)
+    
+    def _on_thread_error(self, thread_id: str, error: str) -> None:
+        """线程错误回调"""
+        with self._lock:
+            if thread_id in self.threads:
+                thread_info = self.threads[thread_id]
+                old_state = thread_info.state
+                
+                thread_info.state = ThreadState.ERROR
+                thread_info.error = error
+                thread_info.end_time = datetime.now()
+                self._active_count -= 1
+                
+                self.thread_state_changed.emit(thread_id, old_state, ThreadState.ERROR)
+                self.thread_error.emit(thread_id, thread_info.name, error)

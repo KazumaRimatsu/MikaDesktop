@@ -10,17 +10,15 @@ import win32process
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
-                               QMessageBox, QDialog, QLabel, QInputDialog, QPlainTextEdit)
+                               QDialog, QLabel, QInputDialog, QPlainTextEdit)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
-
 from Lib.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
 from Lib.process_manager import ProcessManager
+from Lib.win32_omessagebox import information, warning, critical, question, Yes, No
 import Lib.goodbye_tray as goodbye_tray
 import Lib.log_maker as log_maker
 import Lib.config_manager as Config
-import Lib.features.escape_accidental_touch as escape_accidental_touch
-from Lib.features.escape_accidental_touch import DeviceData
 from Lib.threads import manager
 
 log = log_maker.logger()
@@ -143,33 +141,16 @@ class DockApp(QMainWindow):
         self.update_window_position()
         
         # 使用统一的线程管理器启动所有后台服务
-        self.thread_manager = manager.create_thread_manager()
+        self.thread_manager = manager.ThreadManager()
         
-        # 创建并注册通知系统线程
+        # 创建并运行通知系统线程
         try:
             from Lib.features.notification_system import NotificationManager
             self.notification_manager = NotificationManager(parent=self)
-            if self.thread_manager.register_thread(self.notification_manager):
-                log.info("通知系统线程已注册")
-            else:
-                log.error("通知系统线程注册失败")
+            notification_system_id = self.thread_manager.create(name = self.notification_manager.get_name(), start_when_create=True, worker=self.notification_manager)
+            log.info(f"通知系统已开启，id为{notification_system_id}")
         except Exception as e:
             log.error(f"创建通知系统线程时出错: {e}")
-        
-        # 创建并注册误触检测线程
-        try:
-            device_data = DeviceData()
-            self.accidental_touch_monitor = escape_accidental_touch.Monitor(device_data)
-            if self.thread_manager.register_thread(self.accidental_touch_monitor):
-                log.info("误触检测线程已注册")
-            else:
-                log.error("误触检测线程注册失败")
-        except Exception as e:
-            log.error(f"创建误触检测线程时出错: {e}")
-        
-        # 启动所有已注册的线程
-        if not self.thread_manager.start_all():
-            log.error("部分后台服务启动失败，但程序将继续运行")
 
         self.destroyed.connect(self.exit_app)
 
@@ -267,7 +248,7 @@ class DockApp(QMainWindow):
         """统一错误处理"""
         log.error(message)
         if show_dialog:
-            QMessageBox.warning(self, "错误", message)
+            warning(self, "错误", message)
 
     def get_pinned_apps_from_taskbar(self):
         """从任务栏固定的应用程序路径获取应用"""
@@ -570,7 +551,7 @@ class DockApp(QMainWindow):
                 button = self.get_app_button(app_name)
                 if button:
                     self.set_button_style(button, False)
-                QMessageBox.critical(self, "错误", f"无法启动应用: {str(e)}")
+                critical(self, "错误", f"无法启动应用: {str(e)}")
 
     def get_app_button(self, app_name):
         """获取指定应用名称的按钮引用，适用于所有类型的应用"""
@@ -587,13 +568,13 @@ class DockApp(QMainWindow):
         # 检查是否已存在相同路径的应用
         for app in self.apps:
             if app['path'] == app_data['path']:
-                QMessageBox.information(self, "提示", "该应用已存在")
+                information(self, "提示", "该应用已存在")
                 return
         
         # 检查是否与固定应用重复
         for app in self.pinned_apps:
             if app['path'] == app_data['path']:
-                QMessageBox.information(self, "提示", "该应用已在固定列表中")
+                information(self, "提示", "该应用已在固定列表中")
                 return
         
         # 检查是否与运行中应用重复（避免重复添加）
@@ -918,7 +899,7 @@ class DockApp(QMainWindow):
             self, 
             "选择应用程序", 
             "", 
-            "所有文件 (*)"
+            "可执行文件 (*.exe *.bat *.com);;所有文件 (*)"
         )
         
         if file_path:
@@ -928,13 +909,13 @@ class DockApp(QMainWindow):
             # 检查是否已存在相同路径的应用
             for app in self.apps:
                 if app['path'] == file_path:
-                    QMessageBox.information(self, "提示", "该应用已存在")
+                    information(self, "提示", "该应用已存在")
                     return
             
             # 检查是否与固定应用重复
             for app in self.pinned_apps:
                 if app['path'] == file_path:
-                    QMessageBox.information(self, "提示", "该应用已在固定列表中")
+                    information(self, "提示", "该应用已在固定列表中")
                     return
             
             # 自动从文件路径获取应用名（快捷方式则获取快捷方式名称）
@@ -1101,7 +1082,7 @@ class DockApp(QMainWindow):
         try:
             os.startfile(path)
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"无法启动应用: {str(e)}")
+            critical(self, "错误", f"无法启动应用: {str(e)}")
 
     def terminate_app_process(self, app_data):
         """终止应用进程"""
@@ -1184,14 +1165,14 @@ class DockApp(QMainWindow):
             log.error(f"关闭窗口时出错: {e}")
 
     def remove_app(self, app_data):
-        reply = QMessageBox.question(
+        reply = question(
             self, 
             "确认", 
             f"确定要删除应用 '{app_data['name']}' 吗？", 
-            QMessageBox.Yes | QMessageBox.No
+            Yes | No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == Yes:
             self.apps.remove(app_data)
             # 如果应用正在运行，从运行列表中移除
             if app_data['name'] in self.running_apps:
@@ -1243,7 +1224,7 @@ class DockApp(QMainWindow):
                 self.save_settings()
                 self.update_app_buttons()
             else:
-                QMessageBox.warning(self, "错误", "选择的图标文件不存在")
+                warning(self, "错误", "选择的图标文件不存在")
 
     def open_settings(self):
         """打开设置对话框"""
@@ -1266,10 +1247,7 @@ class DockApp(QMainWindow):
                 except Exception:
                     pass
             
-            # 加载壁纸路径（如存在） - 支持旧格式（顶层）和新格式（dock 下）
-            wallpaper_path = dock_config.get('wallpaper', settings.get('wallpaper', ''))
-            if wallpaper_path and os.path.exists(wallpaper_path):
-                self.wallpaper_path = wallpaper_path
+
             
             # 确保加载设置后更新应用按钮
             self.update_app_buttons()
@@ -1283,7 +1261,6 @@ class DockApp(QMainWindow):
             settings = {
                 'dock': {
                     'apps': self.apps,
-                    'wallpaper': getattr(self, 'wallpaper_path', ''),  # 保存壁纸路径
                     # 将 ProcessManager 的排除列表保存到配置
                     'except_processes': getattr(self.process_manager, 'except_processes', [])
                 }
@@ -1399,23 +1376,7 @@ class SettingsDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        # 说明文本
-        info_label = QLabel("壁纸设置：")
-        info_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info_label)
 
-        # 壁纸设置行（横向布局更紧凑）
-        wp_row = QHBoxLayout()
-        self.wallpaper_button = QPushButton("选择壁纸")
-        self.wallpaper_button.clicked.connect(self.select_wallpaper)
-        wp_row.addWidget(self.wallpaper_button)
-        self.current_wallpaper_label = QLabel("当前壁纸: 未设置")
-        wp_row.addWidget(self.current_wallpaper_label, 1)
-        self.reset_wallpaper_button = QPushButton("重置壁纸")
-        self.reset_wallpaper_button.clicked.connect(self.reset_wallpaper)
-        wp_row.addWidget(self.reset_wallpaper_button)
-        layout.addLayout(wp_row)
-        self.update_wallpaper_label()
 
         # 分隔说明
         layout.addSpacing(8)
@@ -1479,38 +1440,7 @@ class SettingsDialog(QDialog):
             }
         """)
 
-    def select_wallpaper(self):
-        """选择壁纸图片"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "选择壁纸图片", 
-            "", 
-            "图片文件 (*.png *.jpg *.jpeg *.bmp *.gif);;所有文件 (*)"
-        )
 
-        if file_path:
-            # 确保保存绝对路径
-            absolute_path = os.path.abspath(file_path)
-            self.parent.wallpaper_path = absolute_path  # 保存到父窗口
-            self.update_wallpaper_label()
-            # 更新壁纸窗口
-            if self.parent.wallpaper_window:
-                self.parent.wallpaper_window.set_wallpaper(absolute_path)
-
-    def update_wallpaper_label(self):
-        """更新壁纸路径显示"""
-        if hasattr(self.parent, 'wallpaper_path') and self.parent.wallpaper_path:
-            self.current_wallpaper_label.setText(f"当前壁纸: {os.path.basename(self.parent.wallpaper_path)}")
-        else:
-            self.current_wallpaper_label.setText("当前壁纸: 未设置")
-
-    def reset_wallpaper(self):
-        """重置壁纸为默认背景"""
-        self.parent.wallpaper_path = ""  # 清除壁纸路径
-        self.update_wallpaper_label()
-        # 重置壁纸窗口为默认背景
-        if self.parent.wallpaper_window:
-            self.parent.wallpaper_window.setStyleSheet("background-color: #36393F;")
 
     def accept(self):
         """重写accept方法以保存设置"""
@@ -1522,9 +1452,8 @@ class SettingsDialog(QDialog):
                 self.parent.process_manager.set_except_processes(lines)
         except Exception as e:
             log.error(f"应用排除列表时出错: {e}")
-        # 保存壁纸与其它设置到父窗口的配置文件
-        if hasattr(self.parent, 'wallpaper_path'):
-            self.parent.save_settings()
+        # 保存设置到父窗口的配置文件
+        self.parent.save_settings()
         super().accept()
 
     def save_settings(self):

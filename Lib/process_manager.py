@@ -7,7 +7,7 @@ import os
 import sys
 import hashlib
 
-from . import MakeAppIcon
+from . import make_app_icon
 
 
 
@@ -19,8 +19,8 @@ class ProcessManager:
             'startmenuexperiencehost.exe',
             'widgets.exe',
             'widgetservice.exe',
-            'python.exe',
-            'SystemSettings.exe'
+            'SystemSettings.exe',
+            'TextInputHost.exe'
         ]
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
@@ -332,7 +332,7 @@ class ProcessManager:
                 try:
                     # 优先使用合成库生成统一风格图标
                     try:
-                        composed_bytes = MakeAppIcon.overlay.compose_on_template(extracted_icon.image)
+                        composed_bytes = make_app_icon.overlay.compose_on_template(extracted_icon.image)
                         with open(icon_path, "wb") as f:
                             f.write(composed_bytes)
                         return icon_path
