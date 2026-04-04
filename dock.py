@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
                                QDialog, QLabel, QInputDialog, QPlainTextEdit)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
-from Lib.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
+from Lib.custom_ui import FontLoader, IconHoverFilter, ContextPopup, ShutdownDialog
 from Lib.process_manager import ProcessManager
 from Lib.win32_omessagebox import information, warning, critical, question, Yes, No
 import Lib.goodbye_tray as goodbye_tray
@@ -109,6 +109,9 @@ class DockApp(QMainWindow):
         super().__init__()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.settings_file = os.path.join(self.script_dir, "settings.json")
+
+        self.font_loader = FontLoader(os.path.join(self.script_dir, "res", "fonts"))
+        log.info(f"字体加载结果: {self.font_loader.load()}") 
         
         # 应用数据存储
         self.running_apps: Dict[str, str] = {}
@@ -964,7 +967,9 @@ class DockApp(QMainWindow):
         self.tooltip.setStyleSheet("""
             QLabel#DockIconTooltip {
                 color: white;
-                font-size: 12px;
+                font-family: 'Source Han Sans SC';
+				font-weight: Medium;
+				font-size: 14px;                         
                 background-color: #4a86e8;
                 border-radius: 5px;
                 padding: 8px 16px;

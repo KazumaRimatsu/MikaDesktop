@@ -1,14 +1,36 @@
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel)
-from BlurWindow.blurWindow import GlobalBlur
+import BlurWindow.blurWindow as blurWindow
+import Lib.log_maker as log_maker
 from Lib.win32_omessagebox import question, Yes, No
+import os
 
 # 添加Windows API导入，用于输入法切换
 import win32con
 import win32api
 
+log = log_maker.logger()
+
+class FontLoader(QFontDatabase):
+	def __init__(self,font_dir = None):
+		if font_dir is None:
+			raise ValueError("font_dir must be provided")
+		self.fontdir = font_dir
+		self.fonts = []
+	
+	def load(self):
+		fontname = os.listdir(self.fontdir)
+		print(fontname)
+		for item in fontname:
+			if item.endswith(".otf"):
+				font_path = os.path.join(self.fontdir, item)
+				font_id = self.addApplicationFont(font_path)
+				self.fonts.append(f"'family' : {self.applicationFontFamilies(font_id)[0]}, 'id' : {font_id}")
+				log.info(f"已加载字体: {item}")
+		print(self.fonts)
+		return self.fonts
 
 class IconHoverFilter(QObject):
 	def __init__(self, parent):
@@ -58,7 +80,7 @@ class ContextPopup(QWidget):
 		scroll_area = QScrollArea()
 		scroll_area.setWidgetResizable(True)
 		scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-		scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+		scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 		scroll_area.setFrameStyle(QFrame.NoFrame)
 		# 内容容器
 		content_widget = QWidget()
@@ -68,7 +90,7 @@ class ContextPopup(QWidget):
 		# 样式（不透明背景）
 		self.setStyleSheet("""
 			QWidget { 
-				background: transparent;
+				background-color: rgba(0, 0, 0, 0);
 				border: 1px solid rgba(255,255,255,20);
 			}
 			QPushButton { 
@@ -76,13 +98,20 @@ class ContextPopup(QWidget):
 				background: transparent; 
 				border: none; 
 				padding: 8px 12px; 
-				text-align: center; 
+				text-align: center;
+				font-size: 14px;
+				font-family: 'Source Han Sans SC';
+				font-weight: Medium;
 			}
 			QPushButton:hover { 
-				background: rgba(255,255,255,0.08); 
+				background: rgba(255,255,255,0.08);
+				font-weight: Medium;
+				font-size: 14px; 
 			}
 			QPushButton:disabled { 
 				color: rgba(255,255,255,0.5); 
+				font-weight: Medium;
+				font-size: 14px; 
 			}
 		""")
 
@@ -132,7 +161,7 @@ class ContextPopup(QWidget):
 		"""应用窗口模糊效果"""
 		try:
 			# 使用GlobalBlur函数为窗口添加模糊效果
-			GlobalBlur(self.winId(), hexColor=False, Acrylic=True, Dark=False, QWidget=self)
+			blurWindow.blur(self.winId(), hexColor=False, Dark=False)
 		except Exception as e:
 			pass  # 静默失败，不影响菜单功能
 
@@ -210,7 +239,7 @@ class ShutdownDialog(QDialog):
 		# 标题
 		title_label = QLabel("希望计算机执行？")
 		title_label.setAlignment(Qt.AlignCenter)
-		title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff; margin-bottom: 10px;")
+		title_label.setStyleSheet("font-size: 20px; font-family: 'Source Han Sans SC'; font-weight: Bold; color: #ffffff; margin-bottom: 10px;")
 		layout.addWidget(title_label)
 
 
@@ -227,7 +256,9 @@ class ShutdownDialog(QDialog):
                 border: none;
                 border-radius: 5px;
                 padding: 12px;
-                font-size: 14px;
+                font-size: 15px;
+				font-family: 'Source Han Sans SC';
+				font-weight: Bold;
                 min-height: 20px;
             }
             QPushButton:hover {
@@ -249,7 +280,9 @@ class ShutdownDialog(QDialog):
                 border: none;
                 border-radius: 5px;
                 padding: 12px;
-                font-size: 14px;
+                font-size: 15px;
+				font-family: 'Source Han Sans SC';
+				font-weight: Bold;
                 min-height: 20px;
             }
             QPushButton:hover {
@@ -271,7 +304,9 @@ class ShutdownDialog(QDialog):
                 border: none;
                 border-radius: 5px;
                 padding: 12px;
-                font-size: 14px;
+                font-size: 15px;
+				font-family: 'Source Han Sans SC';
+				font-weight: Bold;
                 min-height: 20px;
             }
             QPushButton:hover {
@@ -284,28 +319,6 @@ class ShutdownDialog(QDialog):
 		shutdown_btn.clicked.connect(lambda: self.select_action("shutdown"))
 		button_layout.addWidget(shutdown_btn)
 
-		# 休眠按钮
-		hibernate_btn = QPushButton("休眠")
-		hibernate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #607D8B;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 12px;
-                font-size: 14px;
-                min-height: 20px;
-            }
-            QPushButton:hover {
-                background-color: #455A64;
-            }
-            QPushButton:pressed {
-                background-color: #263238;
-            }
-        """)
-		hibernate_btn.clicked.connect(lambda: self.select_action("hibernate"))
-		button_layout.addWidget(hibernate_btn)
-
 		# 取消按钮
 		cancel_btn = QPushButton("取消")
 		cancel_btn.setStyleSheet("""
@@ -315,7 +328,9 @@ class ShutdownDialog(QDialog):
                 border: none;
                 border-radius: 5px;
                 padding: 12px;
-                font-size: 14px;
+                font-size: 15px;
+				font-family: 'Source Han Sans SC';
+				font-weight: Bold;
                 min-height: 20px;
             }
             QPushButton:hover {
@@ -346,7 +361,7 @@ class ShutdownDialog(QDialog):
 		"""应用窗口模糊效果"""
 		try:
 			# 使用GlobalBlur函数为窗口添加模糊效果
-			GlobalBlur(self.winId(), hexColor=False, Acrylic=True, Dark=False, QWidget=self)
+			blurWindow.blur(self.winId(), hexColor=False, Dark=False)
 		except Exception as e:
 			pass  # 静默失败，不影响对话框功能
 

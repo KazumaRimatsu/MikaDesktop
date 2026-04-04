@@ -2,11 +2,6 @@
   "dock": {
     "apps": [
       {
-        "name": "Zenless Zone Zero Cloud",
-        "path": "E:/ZZZGo/ZenlessZoneZeroCloud/Zenless Zone Zero Cloud.exe",
-        "icon": "C:\\Users\\songlei\\AppData\\Local\\AppIcon\\Zenless Zone Zero Cloud_23c163f8.png"
-      },
-      {
         "name": "Feishu",
         "path": "E:/Feishu/Feishu.exe",
         "icon": "C:\\Users\\songlei\\AppData\\Local\\AppIcon\\Feishu_c4a5a360.png"
