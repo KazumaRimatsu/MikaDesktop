@@ -5,12 +5,12 @@ def test_default_notification():
     """测试默认通知"""
     print("测试默认通知...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "title": "测试通知",
             "context": "这是一个测试通知内容，5秒后自动关闭",
             "level": "default",
             "type": "default",
-            "timelimit": "5"
+            "timelimit": 5
         })
         print(f"响应状态码: {response.status_code}")
         print(f"响应内容: {response.text}")
@@ -23,12 +23,12 @@ def test_warning_notification():
     """测试警告通知"""
     print("\n测试警告通知...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "title": "警告",
             "context": "这是一个警告通知，请注意！",
             "level": "warn",
             "type": "default",
-            "timelimit": "3"
+            "timelimit": 3
         })
         print(f"响应状态码: {response.status_code}")
         print(f"响应内容: {response.text}")
@@ -41,7 +41,7 @@ def test_error_notification():
     """测试错误通知"""
     print("\n测试错误通知...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "title": "错误",
             "context": "发生了一个错误，请检查！",
             "level": "error",
@@ -58,12 +58,13 @@ def test_interaction_notification():
     """测试交互式通知"""
     print("\n测试交互式通知...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "title": "请选择",
             "context": "请选择一个选项",
             "level": "default",
             "type": "interaction",
-            "choice": "确认+取消+稍后提醒"
+            "choice": "确认&&取消&&稍后提醒",
+            "wait": "true"
         })
         print(f"响应状态码: {response.status_code}")
         print(f"响应内容: {response.text}")
@@ -79,7 +80,7 @@ def test_invalid_parameters():
     # 测试缺少必要参数
     print("1. 测试缺少title参数...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "context": "缺少标题",
             "level": "default",
             "type": "default"
@@ -92,7 +93,7 @@ def test_invalid_parameters():
     # 测试无效level参数
     print("\n2. 测试无效level参数...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "title": "测试",
             "context": "测试无效level",
             "level": "invalid",
@@ -106,7 +107,7 @@ def test_invalid_parameters():
     # 测试交互式通知缺少choice参数
     print("\n3. 测试交互式通知缺少choice参数...")
     try:
-        response = requests.get("http://127.0.0.2:8848/notify", params={
+        response = requests.post("http://127.0.0.2:8848/notify", json={
             "title": "测试",
             "context": "测试缺少choice",
             "level": "default",

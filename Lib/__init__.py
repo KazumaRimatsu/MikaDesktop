@@ -5,5 +5,6 @@ from . import log_maker
 from . import config_manager
 from . import APIs
 from . import MakeAppIcon
-from . import notification_system
-from . import escape_accidental_touch
+from .features import notification_system
+from .features import escape_accidental_touch
+from . import threads

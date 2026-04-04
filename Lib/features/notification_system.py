@@ -7,9 +7,12 @@ import time
 from typing import Dict, List, Any, Optional
 from PySide6.QtCore import QObject, Signal, QTimer, Qt, Slot, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QApplication
+from BlurWindow.blurWindow import GlobalBlur
 from PySide6.QtGui import QPainter, QColor, QFont
 
-from . import log_maker
+from datetime import datetime
+from .. import log_maker
+from ..threads.lifecycle import ThreadBase, ThreadConfig, ThreadState, ThreadError
 
 log = log_maker.logger()
 
@@ -25,9 +28,56 @@ class NotificationRequestHandler(http.server.BaseHTTPRequestHandler):
         
         # 只处理/notify路径
         if parsed_path.path == '/notify':
+            log.warning("GET请求已弃用，请使用POST请求")
             self.handle_notify_request(query_params)
         else:
             self.send_error(404, "Not Found")
+    
+    def do_POST(self):
+        """处理POST请求"""
+        # 解析路径
+        parsed_path = urllib.parse.urlparse(self.path)
+        
+        # 只处理/notify路径
+        if parsed_path.path != '/notify':
+            self.send_error(404, "Not Found")
+            return
+        
+        # 获取内容长度
+        content_length = self.headers.get('Content-Length')
+        if not content_length:
+            self.send_error(411, "Length Required")
+            return
+        
+        try:
+            content_length = int(content_length)
+        except ValueError:
+            self.send_error(400, "Invalid Content-Length")
+            return
+        
+        # 读取请求体
+        body = self.rfile.read(content_length).decode('utf-8')
+        if not body:
+            self.send_error(400, "Empty request body")
+            return
+        
+        # 解析JSON
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_error(400, "Invalid JSON")
+            return
+        
+        # 将JSON数据转换为与GET查询参数相同的格式（字典，值为列表）
+        query_params = {}
+        for key, value in data.items():
+            if isinstance(value, list):
+                query_params[key] = value
+            else:
+                query_params[key] = [str(value)]
+        
+        # 处理通知请求
+        self.handle_notify_request(query_params)
     
     def handle_notify_request(self, query_params: Dict[str, List[str]]):
         """处理通知请求"""
@@ -63,14 +113,20 @@ class NotificationRequestHandler(http.server.BaseHTTPRequestHandler):
                     self.send_error(400, "Missing required parameter 'choice' for interaction type")
                     return
                 
-                # 解析选项，使用"+"分隔
-                choices = [c.strip() for c in choice_str.split('+') if c.strip()]
+                # 解析选项，使用'&&'分隔
+                choices = [c.strip() for c in choice_str.split('&&') if c.strip()]
                 if len(choices) > 4:
                     self.send_error(400, "Too many choices. Maximum is 4")
                     return
                 if len(choices) == 0:
                     self.send_error(400, "No valid choices provided")
                     return
+            
+            # 解析wait参数
+            wait_for_response = False
+            wait_param = self.get_param(query_params, 'wait')
+            if wait_param and wait_param.lower() == 'true':
+                wait_for_response = True
             
             # 解析超时时间
             timeout = None
@@ -94,8 +150,14 @@ class NotificationRequestHandler(http.server.BaseHTTPRequestHandler):
                 'timeout': timeout,
                 'icon': icon,
                 'choices': choices,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'wait_for_response': wait_for_response
             }
+            
+            # 如果需要等待响应，创建同步事件
+            if wait_for_response and notification_type == 'interaction':
+                notification_data['_response_event'] = threading.Event()
+                notification_data['_response_result'] = None
             
             log.info(f"收到通知请求: {title} - {context} (level: {level}, type: {notification_type})")
             
@@ -103,11 +165,31 @@ class NotificationRequestHandler(http.server.BaseHTTPRequestHandler):
             if hasattr(self.server, 'notification_callback'):
                 self.server.notification_callback(notification_data)
             
-            # 返回成功响应
+            # 返回响应
+            if wait_for_response and notification_type == 'interaction' and '_response_event' in notification_data:
+                # 等待用户选择或超时
+                event = notification_data['_response_event']
+                # 计算等待超时时间：使用通知超时时间（如果存在），否则使用最大60秒
+                wait_timeout = timeout if timeout is not None else 60
+                # 等待事件
+                event_triggered = event.wait(wait_timeout)
+                if event_triggered:
+                    # 获取结果
+                    result = notification_data.get('_response_result')
+                    if result is not None and result != 'timeout':
+                        response = {'status': 'success', 'choice': result}
+                    else:
+                        response = {'status': 'timeout', 'message': 'No choice made before timeout'}
+                else:
+                    # 超时
+                    response = {'status': 'timeout', 'message': 'No choice made before timeout'}
+            else:
+                # 默认响应
+                response = {'status': 'success', 'message': 'Notification received'}
+            
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            response = {'status': 'success', 'message': 'Notification received'}
             self.wfile.write(json.dumps(response).encode('utf-8'))
             
         except Exception as e:
@@ -213,12 +295,6 @@ class NotificationWindow(QWidget):
             Qt.WindowStaysOnTopHint |
             Qt.WindowDoesNotAcceptFocus
         )
-        # 移除透明背景属性，使用样式表设置不透明背景
-        # self.setAttribute(Qt.WA_TranslucentBackground)
-        
-        # 确保窗口背景不透明
-        #self.setAttribute(Qt.WA_OpaquePaintEvent)
-        #self.setStyleSheet("background-color: transparent;")
         
         # 创建主布局
         main_layout = QVBoxLayout(self)
@@ -374,6 +450,12 @@ class NotificationWindow(QWidget):
         """处理交互选择"""
         log.info(f"用户选择了: {choice}")
         self.notification_data['user_choice'] = choice
+        
+        # 设置响应结果并触发事件（如果存在）
+        if '_response_event' in self.notification_data and '_response_result' in self.notification_data:
+            self.notification_data['_response_result'] = choice
+            self.notification_data['_response_event'].set()
+        
         self.close_notification()
     
     def show_with_animation(self):
@@ -423,6 +505,12 @@ class NotificationWindow(QWidget):
         if self.timeout_timer:
             self.timeout_timer.stop()
         
+        # 如果存在等待响应的事件且尚未设置结果，则设置为超时
+        if self.notification_data and '_response_event' in self.notification_data and '_response_result' in self.notification_data:
+            if self.notification_data['_response_result'] is None:
+                self.notification_data['_response_result'] = 'timeout'
+                self.notification_data['_response_event'].set()
+        
         self.clear_choice_buttons()
         self.hide_with_animation()
         
@@ -449,14 +537,25 @@ class NotificationWindow(QWidget):
         super().paintEvent(event)
 
 
-class NotificationManager(QObject):
-    """通知管理器，协调服务器和UI"""
+class NotificationManager(ThreadBase):
+    """通知管理器，协调服务器和UI，遵循统一线程生命周期管理标准"""
     
     # 信号定义
     show_notification_signal = Signal(dict)
     
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, parent=None, config: Optional[ThreadConfig] = None):
+        # 创建简化配置（如果未提供）
+        if config is None:
+            config = ThreadConfig(
+                name="NotificationManager",
+                daemon=True,
+                auto_start=False
+            )
+        
+        # 初始化基类
+        ThreadBase.__init__(self, config, parent)
+        
+        # 原有成员初始化
         self.server = NotificationServer()
         self.notification_window = NotificationWindow()
         self.current_notifications = []
@@ -465,21 +564,76 @@ class NotificationManager(QObject):
         self.notification_window.notification_closed.connect(self.handle_notification_closed)
         self.show_notification_signal.connect(self._show_notification_in_main_thread)
     
-    def start(self):
-        """启动通知系统"""
-        # 启动服务器
-        if not self.server.start(self.show_notification):
-            log.error("无法启动通知服务器")
+    def initialize(self) -> bool:
+        """初始化通知系统资源"""
+        try:
+            log.info(f"初始化通知系统: {self.get_name()}")
+            
+            # 检查服务器是否可以启动
+            if not self.server.start(self.show_notification):
+                log.error("无法启动通知服务器")
+                return False
+            
+            log.info(f"通知系统初始化完成: {self.get_name()}")
+            return True
+            
+        except Exception as e:
+            error = ThreadError(
+                self.get_name(),
+                f"通知系统初始化失败: {str(e)}",
+                e if isinstance(e, Exception) else None
+            )
+            self._handle_error(error)
             return False
-        
-        log.info("通知系统已启动")
-        return True
     
-    def stop(self):
-        """停止通知系统"""
-        self.server.stop()
-        self.notification_window.close()
-        log.info("通知系统已停止")
+    def run(self):
+        """线程主循环 - 运行通知系统"""
+        log.info(f"通知系统开始运行: {self.get_name()}")
+        
+        try:
+            # 主循环：等待停止事件
+            while not self._should_stop():
+                # 检查是否暂停
+                if not self._wait_if_paused():
+                    break
+                
+                # 短暂睡眠以避免忙等待
+                time.sleep(1.0)
+            
+            log.info(f"通知系统运行结束: {self.get_name()}")
+            
+        except Exception as e:
+            error = ThreadError(
+                self.get_name(),
+                f"通知系统运行时发生未捕获异常: {str(e)}",
+                e if isinstance(e, Exception) else None
+            )
+            self._handle_error(error)
+            raise
+    
+    def cleanup(self):
+        """清理通知系统资源"""
+        try:
+            log.info(f"清理通知系统资源: {self.get_name()}")
+            
+            # 停止服务器
+            self.server.stop()
+            
+            # 关闭通知窗口（需要在主线程执行，使用信号）
+            self.notification_window.close()
+            
+            # 清理通知列表
+            self.current_notifications.clear()
+            
+            log.info(f"通知系统资源清理完成: {self.get_name()}")
+            
+        except Exception as e:
+            error = ThreadError(
+                self.get_name(),
+                f"清理通知系统资源时发生错误: {str(e)}",
+                e if isinstance(e, Exception) else None
+            )
+            self._handle_error(error)
     
     def show_notification(self, notification_data: Dict[str, Any]):
         """显示通知（从服务器线程调用）"""

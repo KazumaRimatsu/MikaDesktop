@@ -1,6 +1,12 @@
 {
   "dock": {
-    "apps": [],
+    "apps": [
+      {
+        "name": "Zenless Zone Zero Cloud",
+        "path": "E:/ZZZGo/ZenlessZoneZeroCloud/Zenless Zone Zero Cloud.exe",
+        "icon": "C:\\Users\\songlei\\AppData\\Local\\AppIcon\\Zenless Zone Zero Cloud_23c163f8.png"
+      }
+    ],
     "wallpaper": "",
     "except_processes": [
       "shellexperiencehost.exe",

@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel, QMessageBox)
+from BlurWindow.blurWindow import GlobalBlur
 
 # 添加Windows API导入，用于输入法切换
 import win32con
@@ -43,8 +44,8 @@ class ContextPopup(QWidget):
 		super().__init__(parent)
 		flags = Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 		self.setWindowFlags(flags)
-		# 关闭窗口透明属性以确保样式背景可见
-		self.setAttribute(Qt.WA_TranslucentBackground, False)
+		# 启用窗口透明属性以支持模糊效果
+		self.setAttribute(Qt.WA_TranslucentBackground, True)
 		self.setAttribute(Qt.WA_ShowWithoutActivating, True)
 		self.setFocusPolicy(Qt.NoFocus)
 		# 主布局
@@ -66,7 +67,7 @@ class ContextPopup(QWidget):
 		# 样式（不透明背景）
 		self.setStyleSheet("""
 			QWidget { 
-				background: black;
+				background: transparent;
 				border: 1px solid rgba(255,255,255,20);
 			}
 			QPushButton { 
@@ -122,6 +123,17 @@ class ContextPopup(QWidget):
 		self.setFixedSize(content_w, content_h)
 		scroll_area.setFixedSize(content_w - 12, content_h - 12)
 		content_widget.setFixedWidth(content_w - 12)
+		
+		# 添加窗口模糊效果（延迟确保窗口句柄有效）
+		QTimer.singleShot(100, self.apply_blur_effect)
+
+	def apply_blur_effect(self):
+		"""应用窗口模糊效果"""
+		try:
+			# 使用GlobalBlur函数为窗口添加模糊效果
+			GlobalBlur(self.winId(), hexColor=False, Acrylic=True, Dark=False, QWidget=self)
+		except Exception as e:
+			pass  # 静默失败，不影响菜单功能
 
 	# 重写显示位置方法：始终优先在图标上方显示菜单，并确保显示所有选项
 	def show_at_position(self, pos, sender):
@@ -188,6 +200,8 @@ class ShutdownDialog(QDialog):
 		self.init_ui()
 
 	def init_ui(self):
+		# 启用透明背景以支持模糊效果
+		self.setAttribute(Qt.WA_TranslucentBackground)
 		layout = QVBoxLayout()
 		layout.setContentsMargins(20, 20, 20, 20)
 		layout.setSpacing(10)
@@ -323,6 +337,17 @@ class ShutdownDialog(QDialog):
                 background-color: #000000;
             }
         """)
+		
+		# 添加窗口模糊效果（延迟确保窗口句柄有效）
+		QTimer.singleShot(100, self.apply_blur_effect)
+
+	def apply_blur_effect(self):
+		"""应用窗口模糊效果"""
+		try:
+			# 使用GlobalBlur函数为窗口添加模糊效果
+			GlobalBlur(self.winId(), hexColor=False, Acrylic=True, Dark=False, QWidget=self)
+		except Exception as e:
+			pass  # 静默失败，不影响对话框功能
 
 	def select_action(self, action):
 		"""选择操作并确认"""

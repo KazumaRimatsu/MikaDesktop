@@ -1,7 +1,6 @@
 import gc
 import os
 import sys
-import threading
 from typing import Dict, List, Any
 
 import psutil
@@ -17,11 +16,12 @@ from win32com.shell import shell  # type: ignore
 
 from Lib.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
 from Lib.process_manager import ProcessManager
-import Lib.notification_system
 import Lib.goodbye_tray as goodbye_tray
 import Lib.log_maker as log_maker
 import Lib.config_manager as Config
-import Lib.escape_accidental_touch as escape_accidental_touch
+import Lib.features.escape_accidental_touch as escape_accidental_touch
+from Lib.features.escape_accidental_touch import DeviceData
+from Lib.threads import manager
 
 log = log_maker.logger()
 
@@ -130,6 +130,9 @@ class DockApp(QMainWindow):
         
         # 通知系统
         self.notification_manager = None
+        self.accidental_touch_monitor = None
+        self._target_rect = None
+        self._is_hidden = False
         
         self.init_ui()
         self.load_settings()
@@ -139,29 +142,38 @@ class DockApp(QMainWindow):
         # Position the window at center horizontally and 20 pixels from bottom
         self.update_window_position()
         
-        self.start_accidental_touch()
+        # 使用统一的线程管理器启动所有后台服务
+        self.thread_manager = manager.create_thread_manager()
         
-        # 启动通知系统
-        self.start_notification_system()
+        # 创建并注册通知系统线程
+        try:
+            from Lib.features.notification_system import NotificationManager
+            self.notification_manager = NotificationManager(parent=self)
+            if self.thread_manager.register_thread(self.notification_manager):
+                log.info("通知系统线程已注册")
+            else:
+                log.error("通知系统线程注册失败")
+        except Exception as e:
+            log.error(f"创建通知系统线程时出错: {e}")
+        
+        # 创建并注册误触检测线程
+        try:
+            device_data = DeviceData()
+            self.accidental_touch_monitor = escape_accidental_touch.Monitor(device_data)
+            if self.thread_manager.register_thread(self.accidental_touch_monitor):
+                log.info("误触检测线程已注册")
+            else:
+                log.error("误触检测线程注册失败")
+        except Exception as e:
+            log.error(f"创建误触检测线程时出错: {e}")
+        
+        # 启动所有已注册的线程
+        if not self.thread_manager.start_all():
+            log.error("部分后台服务启动失败，但程序将继续运行")
 
         self.destroyed.connect(self.exit_app)
 
-    def start_notification_system(self):
-        try:
-            manager = Lib.notification_system.NotificationManager()
-            if manager.start():
-                return manager
-            else:
-                return None
-        except Exception as e:
-            log.error(f"启动通知系统失败: {e}")
-    
-    def start_accidental_touch(self):
-        self.escape_accidental_touch = escape_accidental_touch
-        try:
-            threading.Thread(target=self.escape_accidental_touch.start).start()
-        except Exception as e:
-            log.error(f"启动防止误触失败: {e}")
+
 
     def eventFilter(self, obj, event):
         """过滤键盘事件，屏蔽关闭窗口相关的快捷键"""
@@ -401,19 +413,18 @@ class DockApp(QMainWindow):
             # 更新界面
             self.update_app_buttons()
 
-            # 注释掉adjust_window_stacking，因为我们现在使用工作区注册机制
-            # 根据当前运行的应用（仅限 Dock 中的应用）调整 Dock 的层级，
+            # 根据当前运行的应用（仅限 Dock 中的应用）调整 Dock 的显示/隐藏，
             # 以避免遮挡全屏程序（例如全屏视频/浏览器）
-            # try:
-            #     self.adjust_window_stacking()
-            # except Exception as e:
-            #     print(f"调整窗口层级时出错: {e}")
+            try:
+                self.adjust_window_stacking()
+            except Exception as e:
+                log.error(f"调整窗口层级时出错: {e}")
             
         except Exception as e:
             log.error(f"检查运行进程时出错: {e}")
 
     def adjust_window_stacking(self):
-        """根据 Dock 中的应用是否有全屏窗口灵活调整 Dock 的层级"""
+        """根据 Dock 中的应用是否有全屏窗口灵活调整 Dock 的显示/隐藏（带动画）"""
         try:
             # 收集 Dock 中关注的应用路径（去重）
             all_paths = []
@@ -421,25 +432,112 @@ class DockApp(QMainWindow):
                 p = app.get('path') if isinstance(app, dict) else None
                 if p:
                     all_paths.append(p)
-            # 如果其中任意应用处于全屏状态，则将 Dock 设为非顶层，避免遮挡
-            if self.process_manager.any_apps_fullscreen(all_paths):
-                dock_hwnd = int(self.winId())
-                win32gui.SetWindowPos(
-                    dock_hwnd,
-                    win32con.HWND_NOTOPMOST,
-                    0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
-            else:
-                dock_hwnd = int(self.winId())
+            
+            # 检查是否有任意应用处于全屏状态
+            any_fullscreen = self.process_manager.any_apps_fullscreen(all_paths)
+            
+            if any_fullscreen and not self._is_hidden:
+                # 有全屏应用且 Dock 未隐藏，执行隐藏动画
+                self.hide_dock_with_animation()
+            elif not any_fullscreen and self._is_hidden:
+                # 没有全屏应用且 Dock 已隐藏，执行显示动画
+                self.show_dock_with_animation()
+                
+        except Exception as e:
+            log.error(f"adjust_window_stacking error: {e}")
+    
+    def hide_dock_with_animation(self):
+        """将 Dock 隐藏到屏幕下边缘（带动画）"""
+        if self._is_hidden:
+            return
+        
+        # 获取屏幕可用几何
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # 计算隐藏位置：移动到屏幕下边缘之下
+        current_rect = self.geometry()
+        target_rect = QRect(
+            current_rect.x(),
+            screen_geometry.bottom() + 10,  # 完全移出屏幕
+            current_rect.width(),
+            current_rect.height()
+        )
+        
+        # 停止现有动画
+        if self.geometry_anim is not None and isinstance(self.geometry_anim, QPropertyAnimation):
+            try:
+                self.geometry_anim.stop()
+            except:
+                pass
+        
+        # 创建动画
+        self.geometry_anim = QPropertyAnimation(self, b"geometry", self)
+        self.geometry_anim.setDuration(300)  # 毫秒
+        self.geometry_anim.setStartValue(current_rect)
+        self.geometry_anim.setEndValue(target_rect)
+        self.geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.geometry_anim.finished.connect(lambda: self.set_is_hidden(True))
+        self.geometry_anim.start()
+    
+    def show_dock_with_animation(self):
+        """将 Dock 从屏幕下边缘显示（带动画）"""
+        if not self._is_hidden:
+            return
+        
+        # 获取屏幕可用几何并计算目标位置
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # 计算目标位置（原始位置）
+        if self._target_rect is not None:
+            target_rect = self._target_rect
+        else:
+            # 使用当前窗口位置作为目标（实际上应该调用 update_window_position 计算）
+            # 临时计算：居中底部
+            window_height = 80
+            window_width = self.width()
+            x = (screen_geometry.width() - window_width) // 2
+            y = screen_geometry.bottom() - window_height - DockConstants.WINDOW_MARGIN
+            target_rect = QRect(x, y, window_width, window_height)
+        self._target_rect = target_rect
+        
+        # 当前隐藏位置（屏幕下边缘之下）
+        current_rect = self.geometry()
+        
+        # 停止现有动画
+        if self.geometry_anim is not None and isinstance(self.geometry_anim, QPropertyAnimation):
+            try:
+                self.geometry_anim.stop()
+            except:
+                pass
+        
+        # 创建动画
+        # 确保只有垂直移动：使用当前水平位置，目标垂直位置
+        target_rect = QRect(current_rect.x(), target_rect.y(), target_rect.width(), target_rect.height())
+        self.geometry_anim = QPropertyAnimation(self, b"geometry", self)
+        self.geometry_anim.setDuration(300)  # 毫秒
+        self.geometry_anim.setStartValue(current_rect)
+        self.geometry_anim.setEndValue(target_rect)
+        self.geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.geometry_anim.finished.connect(lambda: self.set_is_hidden(False))
+        self.geometry_anim.start()
+    
+    def set_is_hidden(self, hidden):
+        """设置隐藏状态并更新标志"""
+        self._is_hidden = hidden
+        if not hidden:
+            # 显示后确保窗口在最顶层
+            dock_hwnd = int(self.winId())
+            try:
                 win32gui.SetWindowPos(
                     dock_hwnd,
                     win32con.HWND_TOPMOST,
                     0, 0, 0, 0,
                     win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                 )
-        except Exception as e:
-            log.error(f"adjust_window_stacking error: {e}")
+            except Exception as e:
+                log.error(f"设置窗口顶层时出错: {e}")
 
     def handle_app_click(self, app_data):
         """处理应用按钮点击事件 - 添加状态立即更新"""
@@ -554,7 +652,7 @@ class DockApp(QMainWindow):
                         hwnd, 
                         win32con.HWND_TOP, 
                         0, 0, 0, 0, 
-                        win32con.SW_NOMOVE | win32con.SWP_NOSIZE
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                     )
                 else:
                     win32gui.SetWindowPos(
@@ -587,7 +685,7 @@ class DockApp(QMainWindow):
                     hwnd, 
                     win32con.HWND_TOP, 
                     0, 0, 0, 0, 
-                    win32con.SW_NOMOVE | win32con.SWP_NOSIZE
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                 )
             else:
                 win32gui.SetWindowPos(
@@ -694,6 +792,7 @@ class DockApp(QMainWindow):
 
         self.main_layout.addLayout(self.content_layout)
         self.init_tooltip()
+
 
     def update_window_position(self):
         """更新窗口位置 - 根据应用数量自动调整宽度（使用动画平滑过渡）"""
@@ -1200,8 +1299,8 @@ class DockApp(QMainWindow):
         """显示菜单按钮的菜单"""
         # 构建动作列表
         actions = [
-            ("终端", self.open_terminal, True),
-            ("终端管理员", self.open_terminal_admin, True),
+            ("命令提示符", self.open_terminal, True),
+            ("命令提示符（管理员）", self.open_terminal_admin, True),
             ("任务管理器", self.open_task_manager, True),
             ("电源操作", self.show_shutdown_menu, True),
             ("添加应用到程序栏", self.add_application, True),
@@ -1213,19 +1312,19 @@ class DockApp(QMainWindow):
         popup.show_at_position(pos, self.sender())
 
     def open_terminal(self):
-        """打开终端"""
+        """打开命令提示符"""
         try:
             os.startfile("cmd.exe")
         except Exception as e:
-            self.handle_error(f"打开终端失败: {e}")
+            self.handle_error(f"打开命令提示符失败: {e}")
 
     def open_terminal_admin(self):
-        """打开管理员终端"""
+        """打开管理员命令提示符"""
         try:
             import subprocess
             subprocess.run(["powershell", "-Command", "Start-Process", "cmd.exe", "-Verb", "RunAs"])
         except Exception as e:
-            self.handle_error(f"打开管理员终端失败: {e}")
+            self.handle_error(f"打开管理员命令提示符失败: {e}")
 
     def open_task_manager(self):
         """打开任务管理器"""
@@ -1257,16 +1356,13 @@ class DockApp(QMainWindow):
         gc.collect()
         try:
 
-            # 停止通知系统
-            if hasattr(self, 'notification_manager') and self.notification_manager:
+            # 使用统一的线程管理器停止所有后台服务
+            if hasattr(self, 'thread_manager') and self.thread_manager:
                 try:
-                    self.notification_manager.stop()
-                    log.info("通知系统已停止")
+                    self.thread_manager.stop_all()
+                    log.info("所有后台服务已停止")
                 except Exception as e:
-                    log.error(f"停止通知系统时出错: {e}")
-
-            if self.escape_accidental_touch:
-                self.escape_accidental_touch.start(stop_thread=True)
+                    log.error(f"停止后台服务时出错: {e}")
             
             # 停止进程监控定时器
             if hasattr(self, 'process_timer') and self.process_timer:
@@ -1298,6 +1394,8 @@ class SettingsDialog(QDialog):
         self.parent = parent  # 保存父窗口引用
         self.setWindowTitle("设置")
         self.setFixedSize(480, 420)  # 略微增大窗口以容纳编辑区
+        # 启用透明背景以支持模糊效果
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
         layout = QVBoxLayout()
 

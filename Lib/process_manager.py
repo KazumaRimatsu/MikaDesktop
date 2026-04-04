@@ -350,32 +350,95 @@ class ProcessManager:
             return None
 
     def is_window_fullscreen(self, hwnd) -> bool:
-        """判断给定窗口句柄是否覆盖其所在显示器的工作区（近似全屏）"""
+        """判断给定窗口句柄是否处于全屏状态（使用更准确的方法）"""
         try:
             if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
                 return False
-            # 获取窗口矩形
+            
+            # 方法1：检查窗口样式是否包含WS_MAXIMIZE
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            if style & win32con.WS_MAXIMIZE:
+                # 最大化窗口可能是全屏，但需要进一步检查
+                pass
+            
+            # 方法2：检查窗口矩形是否覆盖整个显示器（包括任务栏）
             rect = win32gui.GetWindowRect(hwnd)  # (left, top, right, bottom)
-            # 获取窗口所在显示器
+            
+            # 获取窗口所在显示器信息
             try:
                 monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONULL)
                 if not monitor:
                     monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTOPRIMARY)
                 mon_info = win32api.GetMonitorInfo(monitor)
-                mon_rect = mon_info.get('Monitor')  # (left, top, right, bottom)
+                mon_rect = mon_info.get('Monitor')  # 整个显示器矩形
+                work_rect = mon_info.get('Work')    # 工作区矩形（减去任务栏）
             except Exception:
                 # 退回到主屏幕分辨率
                 mon_rect = (0, 0, win32api.GetSystemMetrics(0), win32api.GetSystemMetrics(1))
-            # 将矩形转换为整型并比较
+                work_rect = mon_rect
+            
+            # 转换为整数元组
             win_rect = tuple(int(x) for x in rect)
             mon_rect = tuple(int(x) for x in mon_rect)
-            # 若窗口矩形覆盖或等于显示器矩形，视为全屏（允许微小偏差）
-            # 使用容差2像素以容忍边框差异
+            work_rect = tuple(int(x) for x in work_rect)
+            
+            # 容差像素（允许边框、阴影等）
             tol = 2
-            return (abs(win_rect[0] - mon_rect[0]) <= tol and
-                    abs(win_rect[1] - mon_rect[1]) <= tol and
-                    abs(win_rect[2] - mon_rect[2]) <= tol and
-                    abs(win_rect[3] - mon_rect[3]) <= tol)
+            
+            # 判断条件1：窗口覆盖整个显示器（包括任务栏）
+            covers_monitor = (
+                abs(win_rect[0] - mon_rect[0]) <= tol and
+                abs(win_rect[1] - mon_rect[1]) <= tol and
+                abs(win_rect[2] - mon_rect[2]) <= tol and
+                abs(win_rect[3] - mon_rect[3]) <= tol
+            )
+            
+            # 判断条件2：窗口覆盖整个工作区（减去任务栏）
+            covers_work = (
+                abs(win_rect[0] - work_rect[0]) <= tol and
+                abs(win_rect[1] - work_rect[1]) <= tol and
+                abs(win_rect[2] - work_rect[2]) <= tol and
+                abs(win_rect[3] - work_rect[3]) <= tol
+            )
+            
+            # 判断条件3：检查窗口是否具有全屏常见样式（无边框、弹出式）
+            # WS_POPUP 样式通常用于全屏游戏和视频播放器
+            is_popup = style & win32con.WS_POPUP
+            # WS_CAPTION 表示有标题栏，全屏窗口通常没有
+            has_caption = style & win32con.WS_CAPTION
+            # WS_THICKFRAME 表示可调整大小的边框
+            has_thickframe = style & win32con.WS_THICKFRAME
+            
+            # 全屏窗口通常具有以下特征之一：
+            # 1. 覆盖整个显示器或工作区
+            # 2. 是弹出式窗口且覆盖大部分显示器
+            # 3. 是最大化窗口且覆盖整个工作区
+            
+            # 计算窗口面积
+            win_area = (win_rect[2] - win_rect[0]) * (win_rect[3] - win_rect[1])
+            mon_area = (mon_rect[2] - mon_rect[0]) * (mon_rect[3] - mon_rect[1])
+            work_area = (work_rect[2] - work_rect[0]) * (work_rect[3] - work_rect[1])
+            
+            # 覆盖面积比例阈值（95%）
+            ratio_threshold = 0.95
+            
+            covers_monitor_ratio = win_area / mon_area if mon_area > 0 else 0
+            covers_work_ratio = win_area / work_area if work_area > 0 else 0
+            
+            # 综合判断
+            if covers_monitor or covers_work:
+                return True
+            
+            if covers_monitor_ratio >= ratio_threshold or covers_work_ratio >= ratio_threshold:
+                return True
+            
+            # 如果是弹出式窗口且面积超过阈值的90%，也认为是全屏
+            if is_popup and not has_caption and covers_monitor_ratio >= 0.9:
+                return True
+            
+            # 其他情况返回False
+            return False
+            
         except Exception as e:
             # 出错时保守返回 False
             return False
