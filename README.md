@@ -22,11 +22,6 @@
 
 ```bash
 pip install -r requirements.txt
-```
-
-macOS与Linux提示找不到pip的：
-
-```bash
 pip3 install -r requirements.txt
 ```
 
