@@ -397,7 +397,7 @@ class DockApp(QMainWindow):
             # 更新界面
             self.update_app_buttons()
 
-            # 根据当前运行的应用（仅限 Dock 中的应用）调整 Dock 的显示/隐藏，
+            # 根据当前运行的应用（仅限 dock栏中的应用）调整 dock栏的显示/隐藏，
             # 以避免遮挡全屏程序（例如全屏视频/浏览器）
             try:
                 self.adjust_window_stacking()
@@ -408,120 +408,43 @@ class DockApp(QMainWindow):
             log.error(f"检查运行进程时出错: {e}")
 
     def adjust_window_stacking(self):
-        """根据 Dock 中的应用是否有全屏窗口灵活调整 Dock 的显示/隐藏（带动画）"""
+        """根据 dock栏中的应用是否有全屏窗口灵活调整 dock栏的显示/隐藏（带动画）"""
         try:
-            # 收集 Dock 中关注的应用路径（去重）
-            all_paths = []
-            for app in (self.pinned_apps + self.apps + self.running_apps_list):
-                p = app.get('path') if isinstance(app, dict) else None
-                if p:
-                    all_paths.append(p)
+            fullscreen_windows = self.process_manager.get_fullscreen_windows()
+            log.debug(f"全屏窗口检测: 找到 {fullscreen_windows}")
+            if len(fullscreen_windows) > 0:
+                log.debug("检测到全屏窗口，隐藏dock栏")
+                self.hide_dock()
+            else:
+                log.debug("未检测到全屏窗口，显示dock栏")
+                self.show_dock()
             
-            # 检查是否有任意应用处于全屏状态
-            any_fullscreen = self.process_manager.any_apps_fullscreen(all_paths)
-            
-            if any_fullscreen and not self._is_hidden:
-                # 有全屏应用且 Dock 未隐藏，执行隐藏动画
-                self.hide_dock_with_animation()
-            elif not any_fullscreen and self._is_hidden:
-                # 没有全屏应用且 Dock 已隐藏，执行显示动画
-                self.show_dock_with_animation()
-                
         except Exception as e:
             log.error(f"adjust_window_stacking error: {e}")
     
-    def hide_dock_with_animation(self):
-        """将 Dock 隐藏到屏幕下边缘（带动画）"""
+    def hide_dock(self):
+        """将 dock栏隐藏到屏幕下边缘（带动画）"""
         if self._is_hidden:
             return
+        try:
+            self.hide()
+            self._is_hidden = True
+            log.info("dock栏隐藏")
+        except Exception as e:
+            log.error(f"隐藏dock栏时出错: {e}")
         
-        # 获取屏幕可用几何
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        
-        # 计算隐藏位置：移动到屏幕下边缘之下
-        current_rect = self.geometry()
-        target_rect = QRect(
-            current_rect.x(),
-            screen_geometry.bottom() + 10,  # 完全移出屏幕
-            current_rect.width(),
-            current_rect.height()
-        )
-        
-        # 停止现有动画
-        if self.geometry_anim is not None and isinstance(self.geometry_anim, QPropertyAnimation):
-            try:
-                self.geometry_anim.stop()
-            except:
-                pass
-        
-        # 创建动画
-        self.geometry_anim = QPropertyAnimation(self, b"geometry", self)
-        self.geometry_anim.setDuration(300)  # 毫秒
-        self.geometry_anim.setStartValue(current_rect)
-        self.geometry_anim.setEndValue(target_rect)
-        self.geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self.geometry_anim.finished.connect(lambda: self.set_is_hidden(True))
-        self.geometry_anim.start()
     
-    def show_dock_with_animation(self):
-        """将 Dock 从屏幕下边缘显示（带动画）"""
+    def show_dock(self):
+        """将 dock栏从屏幕下边缘显示（带动画）"""
         if not self._is_hidden:
             return
-        
-        # 获取屏幕可用几何并计算目标位置
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        
-        # 计算目标位置（原始位置）
-        if self._target_rect is not None:
-            target_rect = self._target_rect
-        else:
-            # 使用当前窗口位置作为目标（实际上应该调用 update_window_position 计算）
-            # 临时计算：居中底部
-            window_height = 80
-            window_width = self.width()
-            x = (screen_geometry.width() - window_width) // 2
-            y = screen_geometry.bottom() - window_height - DockConstants.WINDOW_MARGIN
-            target_rect = QRect(x, y, window_width, window_height)
-        self._target_rect = target_rect
-        
-        # 当前隐藏位置（屏幕下边缘之下）
-        current_rect = self.geometry()
-        
-        # 停止现有动画
-        if self.geometry_anim is not None and isinstance(self.geometry_anim, QPropertyAnimation):
-            try:
-                self.geometry_anim.stop()
-            except:
-                pass
-        
-        # 创建动画
-        # 确保只有垂直移动：使用当前水平位置，目标垂直位置
-        target_rect = QRect(current_rect.x(), target_rect.y(), target_rect.width(), target_rect.height())
-        self.geometry_anim = QPropertyAnimation(self, b"geometry", self)
-        self.geometry_anim.setDuration(300)  # 毫秒
-        self.geometry_anim.setStartValue(current_rect)
-        self.geometry_anim.setEndValue(target_rect)
-        self.geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self.geometry_anim.finished.connect(lambda: self.set_is_hidden(False))
-        self.geometry_anim.start()
-    
-    def set_is_hidden(self, hidden):
-        """设置隐藏状态并更新标志"""
-        self._is_hidden = hidden
-        if not hidden:
-            # 显示后确保窗口在最顶层
-            dock_hwnd = int(self.winId())
-            try:
-                win32gui.SetWindowPos(
-                    dock_hwnd,
-                    win32con.HWND_TOPMOST,
-                    0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
-            except Exception as e:
-                log.error(f"设置窗口顶层时出错: {e}")
+        try:
+            self.show()
+            self._is_hidden = False
+            log.info("dock栏显示")
+        except Exception as e:
+            log.error(f"显示dock栏时出错: {e}")
+
 
     def handle_app_click(self, app_data):
         """处理应用按钮点击事件 - 添加状态立即更新"""
@@ -645,15 +568,6 @@ class DockApp(QMainWindow):
                         0, 0, 0, 0, 
                         win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                     )
-                
-                # 确保Dock窗口保持在顶层
-                dock_hwnd = int(self.winId())  # 确保转换为int类型
-                win32gui.SetWindowPos(
-                    dock_hwnd, 
-                    win32con.HWND_TOPMOST,  # 修改：改为TOPMOST确保始终在最顶层
-                    0, 0, 0, 0, 
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
                 log.info(f"窗口 {title} 已成功激活")
             except Exception as e:
                 log.error(f"激活窗口时出错: {e}")
@@ -678,27 +592,15 @@ class DockApp(QMainWindow):
                     0, 0, 0, 0, 
                     win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                 )
-            
-            # 确保Dock窗口保持在顶层
-            dock_hwnd = int(self.winId())  # 确保转换为int类型
-            win32gui.SetWindowPos(
-                dock_hwnd, 
-                win32con.HWND_TOPMOST,  # 修改：改为TOPMOST确保始终在最顶层
-                0, 0, 0, 0, 
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-            )
-            log.info(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活，Dock保持在顶层")
+            log.info(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活")
         except Exception as e:
             log.error(f"激活窗口时出错: {e}")
 
     def init_ui(self):
         """初始化用户界面"""
-        self.setWindowTitle("Dock")
-        # 移除WindowStaysOnTopHint，使用ToolTip标志避免任务栏显示
-        # 使用Tool标志可以让窗口在某些情况下不被视为常规窗口
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.ToolTip)
+        self.setWindowTitle("301-02 Dock")
+        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.ToolTip)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        # 移除WA_AlwaysStackOnTop属性，避免始终在最顶层
         self.installEventFilter(self)
         self.setStyleSheet(DockConstants.MAIN_WINDOW_STYLE)
 
@@ -1240,7 +1142,7 @@ class DockApp(QMainWindow):
     def load_settings(self):
         try:
             settings = Config.load_config(self.settings_file)
-            # 从 dock 配置部分获取数据
+            # 从 dock栏配置部分获取数据
             dock_config = settings.get('dock', {})
             self.apps = dock_config.get('apps', [])
             

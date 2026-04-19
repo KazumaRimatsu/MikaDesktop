@@ -24,6 +24,8 @@ class ProcessManager:
         ]
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
+        global fullscreen_windows   
+        fullscreen_windows = []
         try:
             from .catch_ico import WindowsIconExtractor
             # 不立即实例化过重资源，延迟在需要时创建
@@ -454,23 +456,111 @@ class ProcessManager:
             pass
         return False
 
-    def any_apps_fullscreen(self, app_paths) -> bool:
-        """
-        对传入的应用路径列表逐个判断，若任意应用有全屏窗口则返回 True。
-        该方法复用 get_app_visible_windows，避免重复枚举进程窗口。
-        """
-        try:
-            # 去重并快速返回
-            seen = set()
-            for p in app_paths:
-                if not p:
-                    continue
-                np = os.path.abspath(p).lower()
-                if np in seen:
-                    continue
-                seen.add(np)
-                if self.is_app_fullscreen(p):
+
+    def get_fullscreen_windows(self):
+        """获取所有全屏窗口的句柄列表，忽略系统窗口"""
+        fullscreen_windows = []
+        
+        def is_system_window(hwnd):
+            """检查窗口是否为系统窗口（桌面、任务栏等）"""
+            try:
+                class_name = win32gui.GetClassName(hwnd)
+                window_title = win32gui.GetWindowText(hwnd)
+                
+                # 常见系统窗口类名
+                system_classes = [
+                    "Progman",           # 程序管理器（桌面）
+                    "WorkerW",           # Worker窗口（桌面背景）
+                    "Shell_TrayWnd",     # 任务栏
+                    "Windows.UI.Core.CoreWindow",  # Windows核心UI窗口
+                    "EdgeUiInputWndClass",  # Windows边缘UI
+                    "ImmersiveLauncher", # 沉浸式启动器（开始菜单）
+                    "ApplicationFrameWindow",  # UWP应用框架
+                    "MsgrHTMLWndClass",  # Messenger HTML窗口
+                    "Internet Explorer_Hidden",  # IE隐藏窗口
+                    "MSCTFIME UI",       # 输入法UI
+                    "TrayNotifyWnd",     # 通知区域
+                    "DV2ControlHost",    # 桌面窗口管理器控制主机
+                    "NativeHWNDHost",    # 原生HWND主机
+                    "ToolbarWindow32",   # 工具栏窗口
+                    "ReBarWindow32",     # ReBar窗口
+                    "MSTaskSwWClass",    # 任务切换窗口
+                    "Shell_SecondaryTrayWnd",  # 副显示器任务栏
+                    "SysListView32",     # 系统列表视图（桌面图标）
+                    "DirectUIHWND",      # DirectUI窗口
+                    "Breadcrumb Parent", # 面包屑导航父窗口
+                    "Search Box",        # 搜索框
+                    "SearchEditBox",     # 搜索编辑框
+                    "SearchDialog",      # 搜索对话框
+                ]
+                
+                # 常见系统窗口标题模式
+                system_title_patterns = [
+                    "Program Manager",
+                    "Windows Shell Experience Host",
+                    "Start",
+                    "Settings",
+                    "Microsoft Text Input Application",
+                    "Cortana",
+                    "Search",
+                    "通知",
+                    "Action Center",
+                    "Windows Explorer",
+                ]
+                
+                # 检查窗口类名
+                if class_name in system_classes:
                     return True
-        except Exception:
-            pass
-        return False
+                
+                # 检查窗口标题是否匹配系统模式
+                for pattern in system_title_patterns:
+                    if pattern in window_title:
+                        return True
+                
+                # 检查是否为桌面窗口（空标题或特定标题且类名为Progman或WorkerW）
+                if class_name in ["Progman", "WorkerW"]:
+                    # 桌面窗口通常没有标题或有特定标题
+                    if not window_title.strip() or window_title == "Program Manager":
+                        return True
+                
+                # 检查进程是否为explorer.exe且窗口是桌面相关类
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    proc = psutil.Process(pid)
+                    proc_name = proc.name().lower()
+                    
+                    # 如果是explorer.exe且窗口类是桌面相关的，则认为是系统窗口
+                    if proc_name == "explorer.exe" and class_name in ["Progman", "WorkerW", "SysListView32"]:
+                        return True
+                    
+                    # 检查是否在排除进程列表中
+                    if proc_name in self.except_processes:
+                        return True
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+                except Exception:
+                    pass
+                
+                return False
+            except Exception:
+                return False  # 出错时保守返回非系统窗口
+        
+        def callback(hwnd, _):
+            try:
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                
+                # 跳过系统窗口
+                if is_system_window(hwnd):
+                    return True
+                
+                # 检查是否为全屏窗口
+                if self.is_window_fullscreen(hwnd):
+                    fullscreen_windows.append(hwnd)
+            except Exception:
+                pass
+            return True
+        
+        win32gui.EnumWindows(callback, None)
+        return fullscreen_windows
