@@ -2,6 +2,7 @@ import gc
 import os
 import sys
 from typing import Dict, List, Any
+import subprocess
 
 import psutil
 import win32con
@@ -13,15 +14,18 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
                                QDialog, QLabel, QInputDialog, QPlainTextEdit)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
-from Lib.custom_ui import FontLoader, IconHoverFilter, ContextPopup, ShutdownDialog
-from Lib.process_manager import ProcessManager
-from Lib.win32_omessagebox import information, warning, critical, question, Yes, No
-import Lib.goodbye_tray as goodbye_tray
-import Lib.log_maker as log_maker
-import Lib.config_manager as Config
-from Lib.threads import manager
+from core.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
+from core.process_manager import ProcessManager
+import core.skills.sys32 as sys32
+import core.log_maker as log_maker
+import core.config_manager as Config
+import core.notification_system as notification_system
+
+from core.threads import manager
 
 log = log_maker.logger()
+#log.enable_debug()
+log.disable_debug()
 
 
 # 常量定义
@@ -109,9 +113,6 @@ class DockApp(QMainWindow):
         super().__init__()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.settings_file = os.path.join(self.script_dir, "settings.json")
-
-        self.font_loader = FontLoader(os.path.join(self.script_dir, "res", "fonts"))
-        log.info(f"字体加载结果: {self.font_loader.load()}") 
         
         # 应用数据存储
         self.running_apps: Dict[str, str] = {}
@@ -134,6 +135,7 @@ class DockApp(QMainWindow):
         self.accidental_touch_monitor = None
         self._target_rect = None
         self._is_hidden = False
+        self.hwnd = None
         
         self.init_ui()
         self.load_settings()
@@ -148,8 +150,7 @@ class DockApp(QMainWindow):
         
         # 创建并运行通知系统线程
         try:
-            from Lib.features.notification_system import NotificationManager
-            self.notification_manager = NotificationManager(parent=self)
+            self.notification_manager = notification_system.NotificationManager(parent=self)
             notification_system_id = self.thread_manager.create(name = self.notification_manager.get_name(), start_when_create=True, worker=self.notification_manager)
             log.info(f"通知系统已开启，id为{notification_system_id}")
         except Exception as e:
@@ -251,7 +252,7 @@ class DockApp(QMainWindow):
         """统一错误处理"""
         log.error(message)
         if show_dialog:
-            warning(self, "错误", message)
+            sys32.messagebox("错误", message, sys32.MB_ICONSTOP | sys32.MB_OKCANCEL)
 
     def get_pinned_apps_from_taskbar(self):
         """从任务栏固定的应用程序路径获取应用"""
@@ -424,10 +425,10 @@ class DockApp(QMainWindow):
     
     def hide_dock(self):
         """将 dock栏隐藏到屏幕下边缘（带动画）"""
-        if self._is_hidden:
+        if self._is_hidden or self.hwnd is None:
             return
         try:
-            self.hide()
+            sys32.hide_window(self.hwnd)
             self._is_hidden = True
             log.info("dock栏隐藏")
         except Exception as e:
@@ -436,10 +437,10 @@ class DockApp(QMainWindow):
     
     def show_dock(self):
         """将 dock栏从屏幕下边缘显示（带动画）"""
-        if not self._is_hidden:
+        if not self._is_hidden or self.hwnd is None:
             return
         try:
-            self.show()
+            sys32.show_window(self.hwnd)
             self._is_hidden = False
             log.info("dock栏显示")
         except Exception as e:
@@ -477,7 +478,7 @@ class DockApp(QMainWindow):
                 button = self.get_app_button(app_name)
                 if button:
                     self.set_button_style(button, False)
-                critical(self, "错误", f"无法启动应用: {str(e)}")
+                sys32.messagebox("错误", f"无法启动应用: {str(e)}", sys32.MB_ICONSTOP | sys32.MB_OK)
 
     def get_app_button(self, app_name):
         """获取指定应用名称的按钮引用，适用于所有类型的应用"""
@@ -494,13 +495,13 @@ class DockApp(QMainWindow):
         # 检查是否已存在相同路径的应用
         for app in self.apps:
             if app['path'] == app_data['path']:
-                information(self, "提示", "该应用已存在")
-                return
+                sys32.messagebox("提示", "该应用已存在", sys32.MB_ICONINFORMATION)
+            return
         
         # 检查是否与固定应用重复
         for app in self.pinned_apps:
             if app['path'] == app_data['path']:
-                information(self, "提示", "该应用已在固定列表中")
+                sys32.messagebox("提示", "该应用已在固定列表中", sys32.MB_ICONINFORMATION)
                 return
         
         # 检查是否与运行中应用重复（避免重复添加）
@@ -814,13 +815,13 @@ class DockApp(QMainWindow):
             # 检查是否已存在相同路径的应用
             for app in self.apps:
                 if app['path'] == file_path:
-                    information(self, "提示", "该应用已存在")
+                    sys32.messagebox("提示", "该应用已存在", sys32.MB_ICONINFORMATION | sys32.MB_OK)
                     return
             
             # 检查是否与固定应用重复
             for app in self.pinned_apps:
                 if app['path'] == file_path:
-                    information(self, "提示", "该应用已在固定列表中")
+                    sys32.messagebox("提示", "该应用已在固定列表中", sys32.MB_ICONINFORMATION | sys32.MB_OK)
                     return
             
             # 自动从文件路径获取应用名（快捷方式则获取快捷方式名称）
@@ -869,7 +870,7 @@ class DockApp(QMainWindow):
         self.tooltip.setStyleSheet("""
             QLabel#DockIconTooltip {
                 color: white;
-                font-family: 'Source Han Sans SC';
+                font-family: 'Microsoft YaHei UI';
 				font-weight: Medium;
 				font-size: 14px;                         
                 background-color: #4a86e8;
@@ -989,7 +990,7 @@ class DockApp(QMainWindow):
         try:
             os.startfile(path)
         except Exception as e:
-            critical(self, "错误", f"无法启动应用: {str(e)}")
+            sys32.messagebox("错误", f"无法启动应用: {str(e)}", sys32.MB_ICONSTOP | sys32.MB_OK)
 
     def terminate_app_process(self, app_data):
         """终止应用进程"""
@@ -1072,14 +1073,13 @@ class DockApp(QMainWindow):
             log.error(f"关闭窗口时出错: {e}")
 
     def remove_app(self, app_data):
-        reply = question(
-            self, 
-            "确认", 
-            f"确定要删除应用 '{app_data['name']}' 吗？", 
-            Yes | No
+        reply = sys32.messagebox(
+            "确认",
+            f"确定要删除应用 '{app_data['name']}' 吗？",
+            sys32.MB_YESNO | sys32.MB_ICONQUESTION
         )
-        
-        if reply == Yes:
+
+        if reply == sys32.IDYES:
             self.apps.remove(app_data)
             # 如果应用正在运行，从运行列表中移除
             if app_data['name'] in self.running_apps:
@@ -1131,7 +1131,7 @@ class DockApp(QMainWindow):
                 self.save_settings()
                 self.update_app_buttons()
             else:
-                warning(self, "错误", "选择的图标文件不存在")
+                sys32.messagebox("错误", "选择的图标文件不存在", sys32.MB_ICONWARNING | sys32.MB_OK)
 
     def open_settings(self):
         """打开设置对话框"""
@@ -1223,14 +1223,29 @@ class DockApp(QMainWindow):
             dialog = ShutdownDialog(self)
             if dialog.exec() == QDialog.Accepted:
                 action = dialog.selected_action
-                if action == "logout":
-                    os.system("shutdown /l")
-                elif action == "shutdown":
-                    os.system("shutdown /s /t 0")
-                elif action == "restart":
-                    os.system("shutdown /r /t 0")
-                elif action == "hibernate":
-                    os.system("rundll32.exe powrprof.dll,SetSuspendState Hibernate")
+
+                action_names = {
+                    "logout": "注销",
+                    "shutdown": "关机",
+                    "restart": "重启",
+                    "hibernate": "休眠"
+                }
+
+                reply = sys32.messagebox(
+                    "确认操作",
+                    f"确定要执行{action_names[action]}操作吗？\n\n请确保已保存所有工作！",
+                    sys32.MB_YESNO | sys32.MB_ICONQUESTION,
+                )
+
+                if reply == sys32.IDYES:
+                    if action == "logout":
+                        subprocess.run(["shutdown.exe", "/l"])
+                    elif action == "shutdown":
+                        subprocess.run(["shutdown.exe", "/s", "/t", "0"])
+                    elif action == "restart":
+                        subprocess.run(["shutdown.exe", "/r", "/t", "0"])
+                    elif action == "hibernate":
+                        subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "Hibernate"])
         except Exception as e:
             self.handle_error(f"显示关机对话框失败: {e}")
 
@@ -1257,7 +1272,7 @@ class DockApp(QMainWindow):
                 self.hotkey_manager.stop()
 
             # 重启explorer.exe
-            goodbye_tray.hello()
+            sys32.show_window(sys32.HWND_TRAY)
             
             log.info("应用程序已清理资源并退出")
             sys.exit(0)
@@ -1265,11 +1280,16 @@ class DockApp(QMainWindow):
         except Exception as e:
             log.error(f"退出应用时出错: {e}")
             # 重启explorer.exe
-            goodbye_tray.hello()
+            sys32.show_window(sys32.HWND_TRAY)
             os._exit(0)
 
     def closeEvent(self, event):
         event.ignore()  # 忽略关闭事件，因为应用程序不应该真正退出
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.hwnd is None:
+            self.hwnd = int(self.winId())
 
 
 class SettingsDialog(QDialog):
@@ -1368,7 +1388,7 @@ class SettingsDialog(QDialog):
 
 
 def main():
-    goodbye_tray.goodbye()
+    sys32.hide_window(sys32.HWND_TRAY)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 防止关闭主窗口时退出
     

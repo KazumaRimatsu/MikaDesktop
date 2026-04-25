@@ -1,6 +1,6 @@
 *.ui
 __pycache__/
 apps.json
-appsettings.json
+settings.json
 log/
 杂物/
