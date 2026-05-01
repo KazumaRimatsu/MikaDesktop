@@ -17,8 +17,13 @@ DEFAULT_CONFIG = {
       "wetype_server.exe",
       "wetype_service.exe",
       "wetype_renderer.exe",
-      "systemsettings.exe"
-    ]},
+      "systemsettings.exe",
+      "textinputhost.exe"
+    ]
+  },
+  "notify": {
+    "default_timeout": 0
+  },
   "debug": False
 }
 

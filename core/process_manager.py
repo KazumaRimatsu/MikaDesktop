@@ -9,6 +9,9 @@ import win32api
 
 import core.skills.sys32 as sys32
 from . import make_app_icon
+from . import log_maker
+
+log = log_maker.logger()
 
 
 
@@ -25,8 +28,6 @@ class ProcessManager:
         ]
         # lazy extractor instance (复用 CatchIco 提取器，避免频繁创建)
         self._extractor = None
-        global fullscreen_windows   
-        fullscreen_windows = []
         try:
             from .catch_ico import WindowsIconExtractor
             # 不立即实例化过重资源，延迟在需要时创建
@@ -65,9 +66,7 @@ class ProcessManager:
             if normalized:
                 self.except_processes = normalized
         except Exception as e:
-            print(f"设置排除进程列表时出错: {e}")
-            # 保持原始列表不变
-            pass
+            log.error(f"设置排除进程列表时出错: {e}")
 
     def _get_extractor(self):
         if self._extractor is None and self._extractor_class:
@@ -109,7 +108,7 @@ class ProcessManager:
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass  # 忽略无法访问的进程
                 except Exception as e:
-                    print(f"检查窗口 {hwnd} 时出错: {e}")
+                    log.debug(f"检查窗口 {hwnd} 时出错: {e}")
                     
                 return True  # 继续遍历
             
@@ -120,7 +119,7 @@ class ProcessManager:
             return len(result) > 0
             
         except Exception as e:
-            print(f"检查窗口时出错: {e}")
+            log.error(f"检查窗口时出错: {e}")
             return False
 
     def get_running_processes(self, known_apps_paths):
@@ -198,10 +197,10 @@ class ProcessManager:
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
                 except Exception as e:
-                    print(f"处理进程 {process_info.get('name', 'Unknown')} 时出错: {e}")
+                    log.debug(f"处理进程 {process_info.get('name', 'Unknown')} 时出错: {e}")
                     continue
         except Exception as e:
-            print(f"获取运行进程时出错: {e}")
+            log.error(f"获取运行进程时出错: {e}")
         
         return running_processes
 
@@ -245,14 +244,14 @@ class ProcessManager:
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         pass
                     except Exception as e:
-                        print(f"检查窗口 {hwnd} 时出错: {e}")
+                        log.debug(f"检查窗口 {hwnd} 时出错: {e}")
                 return True  # 继续遍历
             
             win32gui.EnumWindows(enum_windows_proc, visible_windows)
             
             return visible_windows
         except Exception as e:
-            print(f"检查窗口时出错: {e}")
+            log.error(f"检查窗口时出错: {e}")
             return []
 
     def close_app_window(self, app_path):
@@ -273,7 +272,7 @@ class ProcessManager:
                         if window_title.strip() != '':
                             # 尝试优雅地关闭窗口
                             win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-                            print(f"已发送关闭命令到窗口: {window_title}")
+                            log.info(f"已发送关闭命令到窗口: {window_title}")
                             return False  # 找到并处理了窗口，停止枚举
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass
@@ -282,7 +281,7 @@ class ProcessManager:
         try:
             win32gui.EnumWindows(enum_windows_proc, 0)
         except Exception as e:
-            print(f"关闭窗口时出错: {e}")
+            log.error(f"关闭窗口时出错: {e}")
 
     def terminate_app_process(self, app_path):
         """终止应用进程"""
@@ -306,14 +305,14 @@ class ProcessManager:
                         
                         # 终止进程
                         proc.terminate()
-                        print(f"已终止进程: {process_info['name']} (PID: {proc.pid})")
+                        log.info(f"已终止进程: {process_info['name']} (PID: {proc.pid})")
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
                 except Exception as e:
-                    print(f"终止进程 {proc.name()} 时出错: {e}")
+                    log.debug(f"终止进程 {proc.name()} 时出错: {e}")
                     continue
         except Exception as e:
-            print(f"终止应用进程时出错: {e}")
+            log.error(f"终止应用进程时出错: {e}")
             
     def extract_icon(self, exe_path):
         """提取图标，使用CatchIco.py中的功能并通过 MakeAppIcon.compose_on_template 生成统一风格图标"""
@@ -344,12 +343,12 @@ class ProcessManager:
                         extracted_icon.image.save(icon_path)
                         return icon_path
                 except Exception as e:
-                    print(f"保存/合成图标时出错: {e}")
+                    log.error(f"保存/合成图标时出错: {e}")
                     return None
             else:
                 return None
         except Exception as e:
-            print(f"使用图标提取器出错: {e}")
+            log.error(f"使用图标提取器出错: {e}")
             return None
 
     def is_window_fullscreen(self, hwnd) -> bool:
@@ -359,22 +358,9 @@ class ProcessManager:
                 return False
             
             sys32.USER32.SetProcessDPIAware()
-            #print(sys32.REAL_SCREEN_RECT)
             rect = sys32.get_window_rect(hwnd)
-            #print(rect)
-            if_a = (rect[2] >= sys32.REAL_SCREEN_WIDTH and rect[3] >= sys32.REAL_SCREEN_HEIGHT)
-            if_b = (rect == sys32.REAL_SCREEN_RECT)
-            
-            if if_a or if_b:   
-                return True
-            else:
-                return False
-            
-            # 其他情况返回False
-            return False
-            
-        except Exception as e:
-            # 出错时保守返回 False
+            return (rect[2] >= sys32.REAL_SCREEN_WIDTH and rect[3] >= sys32.REAL_SCREEN_HEIGHT) or rect == sys32.REAL_SCREEN_RECT
+        except Exception:
             return False
 
     def is_app_fullscreen(self, app_path) -> bool:

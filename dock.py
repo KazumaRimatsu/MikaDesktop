@@ -20,8 +20,11 @@ import core.skills.sys32 as sys32
 import core.log_maker as log_maker
 import core.config_manager as Config
 import core.notification_system as notification_system
+import core.settings as settings
 
 from core.threads import manager
+
+VERSION = "0.0.0"
 
 log = log_maker.logger()
 #log.enable_debug()
@@ -42,14 +45,15 @@ class DockConstants:
     
     # 颜色常量
     COLOR_BACKGROUND = "#ECECEC"
-    COLOR_HOVER = "#DADADA"
-    COLOR_BORDER_ACTIVE = "#4a86e8"
-    COLOR_BORDER_INACTIVE = "transparent"
-    COLOR_BG_ACTIVE = "rgba(74, 134, 232, 100)"
-    COLOR_BG_HOVER_ACTIVE = "rgba(58, 118, 216, 150)"
-    COLOR_BG_HOVER_INACTIVE = "rgba(200, 200, 200, 100)"
-    COLOR_SEPARATOR = "#CCCCCC"
-    COLOR_WINDOW_BORDER = "rgba(0, 0, 0, 0.1)"
+    COLOR_HOVER = "#e9e1d4"
+    COLOR_BORDER_ACTIVE = "#52d1ff"
+    COLOR_BORDER_INACTIVE = "#555555"
+    COLOR_BG_ACTIVE = "#008566"
+    COLOR_BG_HOVER_ACTIVE = "#00e6eb"
+    COLOR_BG_HOVER_INACTIVE = "#65E2D2"
+    COLOR_SEPARATOR = "#888888"
+    COLOR_WINDOW_BORDER = "#000000"
+    COLOR_TOOLTIP= "#008566"
     
     # 样式表模板
     BUTTON_STYLE_RUNNING = f"""
@@ -92,7 +96,7 @@ class DockConstants:
     
     MAIN_WINDOW_STYLE = f"""
         QMainWindow {{
-            background-color: {COLOR_BACKGROUND};
+            background: {COLOR_BACKGROUND};
             border: 1px solid {COLOR_WINDOW_BORDER};
             border-radius: {WINDOW_BORDER_RADIUS}px;
         }}
@@ -132,8 +136,6 @@ class DockApp(QMainWindow):
         
         # 通知系统
         self.notification_manager = None
-        self.accidental_touch_monitor = None
-        self._target_rect = None
         self._is_hidden = False
         self.hwnd = None
         
@@ -490,13 +492,26 @@ class DockApp(QMainWindow):
             return self.running_app_buttons[app_name]
         return None
 
+    def _extract_app_name(self, file_path: str) -> str:
+        """从文件路径提取应用名（快捷方式和可执行文件统一处理）"""
+        return os.path.splitext(os.path.basename(file_path))[0]
+
+    def _generate_unique_app_name(self, base_name: str) -> str:
+        """生成不与已有应用重名的唯一应用名，重名时添加 (1), (2)... 后缀"""
+        name = base_name
+        counter = 1
+        while any(app['name'] == name for app in self.apps):
+            name = f"{base_name} ({counter})"
+            counter += 1
+        return name
+
     def add_running_app_to_dock(self, app_data):
         """将运行中的应用添加到程序栏"""
         # 检查是否已存在相同路径的应用
         for app in self.apps:
             if app['path'] == app_data['path']:
                 sys32.messagebox("提示", "该应用已存在", sys32.MB_ICONINFORMATION)
-            return
+                return
         
         # 检查是否与固定应用重复
         for app in self.pinned_apps:
@@ -504,30 +519,12 @@ class DockApp(QMainWindow):
                 sys32.messagebox("提示", "该应用已在固定列表中", sys32.MB_ICONINFORMATION)
                 return
         
-        # 检查是否与运行中应用重复（避免重复添加）
-        for app in self.running_apps_list:
-            if app['path'] == app_data['path']:
-                # 从运行中应用列表中移除，因为它将被添加到用户应用列表
-                self.running_apps_list.remove(app)
-                break
+        # 从运行中应用列表中移除（避免重复）
+        self.running_apps_list = [app for app in self.running_apps_list if app['path'] != app_data['path']]
         
-        # 自动从文件路径获取应用名（快捷方式则获取快捷方式名称）
-        file_path = app_data['path']
-        if file_path.endswith('.lnk'):
-            # 如果是快捷方式，尝试获取快捷方式的实际名称
-            app_name = os.path.splitext(os.path.basename(file_path))[0]
-        else:
-            # 如果是可执行文件，使用文件名作为应用名
-            app_name = os.path.splitext(os.path.basename(file_path))[0]
+        base_name = self._extract_app_name(app_data['path'])
+        app_name = self._generate_unique_app_name(base_name)
         
-        # 检查是否有重复的应用名，如果有则添加后缀
-        counter = 1
-        original_app_name = app_name
-        while any(app['name'] == app_name for app in self.apps):
-            app_name = f"{original_app_name} ({counter})"
-            counter += 1
-        
-        # 添加应用到用户应用列表
         new_app = {
             'name': app_name,
             'path': app_data['path'],
@@ -535,64 +532,29 @@ class DockApp(QMainWindow):
         }
         self.apps.append(new_app)
         
-        # 保存设置
         self.save_settings()
-        
-        # 更新界面
         self.update_app_buttons()
 
-    def get_app_visible_windows(self, app_path):
-        """获取应用的所有可见窗口，使用进程管理器的方法"""
-        return self.process_manager.get_app_visible_windows(app_path)
-
     def activate_window(self, app_path):
-        """激活已运行的应用窗口"""
-        # 获取应用的所有可见窗口
+        """激活已运行的应用窗口（取第一个可见窗口）"""
         visible_windows = self.process_manager.get_app_visible_windows(app_path)
-        
         if visible_windows:
-            # 如果有多个窗口，激活第一个窗口
-            hwnd, title = visible_windows[0]
-            try:
-                if win32gui.IsIconic(hwnd):  # 如果窗口最小化，则恢复
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    win32gui.SetWindowPos(
-                        hwnd, 
-                        win32con.HWND_TOP, 
-                        0, 0, 0, 0, 
-                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                    )
-                else:
-                    win32gui.SetWindowPos(
-                        hwnd, 
-                        win32con.HWND_TOP, 
-                        0, 0, 0, 0, 
-                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                    )
-                log.info(f"窗口 {title} 已成功激活")
-            except Exception as e:
-                log.error(f"激活窗口时出错: {e}")
+            hwnd, _ = visible_windows[0]
+            self._bring_window_to_top(hwnd)
         else:
             log.warning(f"未找到应用 {app_path} 的可见窗口")
 
     def activate_specific_window(self, hwnd):
         """激活指定的窗口句柄"""
+        self._bring_window_to_top(hwnd)
+
+    def _bring_window_to_top(self, hwnd):
+        """将指定窗口置顶并恢复（如果最小化）"""
         try:
-            if win32gui.IsIconic(hwnd):  # 如果窗口最小化，则恢复
+            if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                win32gui.SetWindowPos(
-                    hwnd, 
-                    win32con.HWND_TOP, 
-                    0, 0, 0, 0, 
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
-            else:
-                win32gui.SetWindowPos(
-                    hwnd, 
-                    win32con.HWND_TOP, 
-                    0, 0, 0, 0, 
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
             log.info(f"窗口 {win32gui.GetWindowText(hwnd)} 已成功激活")
         except Exception as e:
             log.error(f"激活窗口时出错: {e}")
@@ -622,7 +584,8 @@ class DockApp(QMainWindow):
         # 添加菜单按钮
         self.menu_button = self.create_special_button(
             os.path.join(self.script_dir, "res", "icon_start.png"),
-            self.show_menu
+            self.show_menu,
+            right_click_handler=self.show_menu
         )
         self.content_layout.addWidget(self.menu_button)
 
@@ -684,9 +647,7 @@ class DockApp(QMainWindow):
     def update_window_position(self):
         """更新窗口位置 - 根据应用数量自动调整宽度（使用动画平滑过渡）"""
         # 使用可用几何（工作区）而不是整个屏幕几何
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.geometry()
-        available_geometry = screen.availableGeometry()
+        available_geometry = QApplication.primaryScreen().availableGeometry()
         
         # 计算所需宽度：菜单按钮 + 固定应用按钮 + 分隔符 + 用户应用按钮 + 运行应用分隔符 + 运行应用按钮 + 设置按钮 + 间距
         pinned_button_count = len(self.pinned_apps)
@@ -750,8 +711,8 @@ class DockApp(QMainWindow):
         if self.geometry_anim is not None and isinstance(self.geometry_anim, QPropertyAnimation):
             try:
                 self.geometry_anim.stop()
-            except:
-                pass
+            except Exception as e:
+                log.debug(f"停止几何动画时出错: {e}")
         
         # 创建新动画并保存引用，避免被回收
         self.geometry_anim = QPropertyAnimation(self, b"geometry", self)
@@ -764,7 +725,7 @@ class DockApp(QMainWindow):
     
 
     
-    def create_special_button(self, icon_path: str, click_handler) -> QPushButton:
+    def create_special_button(self, icon_path: str, click_handler, right_click_handler=None) -> QPushButton:
         """创建特殊按钮（菜单、设置等）"""
         button = QPushButton()
         button.setFixedSize(DockConstants.BUTTON_SIZE, DockConstants.BUTTON_SIZE)
@@ -776,10 +737,9 @@ class DockApp(QMainWindow):
         button.setStyleSheet(DockConstants.BUTTON_STYLE_INACTIVE)
         button.clicked.connect(click_handler)
         
-        # 如果是菜单按钮，添加右键菜单支持
-        if click_handler == self.show_menu:
+        if right_click_handler:
             button.setContextMenuPolicy(Qt.CustomContextMenu)
-            button.customContextMenuRequested.connect(self.show_menu)
+            button.customContextMenuRequested.connect(right_click_handler)
         
         return button
 
@@ -788,17 +748,11 @@ class DockApp(QMainWindow):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(QColor("#ECECEC"))
+        painter.setBrush(QColor(DockConstants.COLOR_BACKGROUND))
         painter.setPen(QPen(QColor(0, 0, 0, 30), 1))
-        painter.drawRoundedRect(self.rect(), 15, 15)
+        painter.drawRoundedRect(self.rect(), DockConstants.WINDOW_BORDER_RADIUS, DockConstants.WINDOW_BORDER_RADIUS)
     
-    def resizeEvent(self, event):
-        """窗口大小变化事件"""
-        super().resizeEvent(event)
-    
-    def moveEvent(self, event):
-        """窗口移动事件"""
-        super().moveEvent(event)
+
 
     def add_application(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -809,74 +763,47 @@ class DockApp(QMainWindow):
         )
         
         if file_path:
-            # 提取图标（使用 ProcessManager）
             icon_path = self.process_manager.extract_icon(file_path)
             
-            # 检查是否已存在相同路径的应用
             for app in self.apps:
                 if app['path'] == file_path:
                     sys32.messagebox("提示", "该应用已存在", sys32.MB_ICONINFORMATION | sys32.MB_OK)
                     return
             
-            # 检查是否与固定应用重复
             for app in self.pinned_apps:
                 if app['path'] == file_path:
                     sys32.messagebox("提示", "该应用已在固定列表中", sys32.MB_ICONINFORMATION | sys32.MB_OK)
                     return
             
-            # 自动从文件路径获取应用名（快捷方式则获取快捷方式名称）
-            if file_path.endswith('.lnk'):
-                # 如果是快捷方式，尝试获取快捷方式的实际名称
-                app_name = os.path.splitext(os.path.basename(file_path))[0]
-            else:
-                # 如果是可执行文件，使用文件名作为应用名
-                app_name = os.path.splitext(os.path.basename(file_path))[0]
+            base_name = self._extract_app_name(file_path)
+            app_name = self._generate_unique_app_name(base_name)
             
-            # 检查是否有重复的应用名，如果有则添加后缀
-            counter = 1
-            original_app_name = app_name
-            while any(app['name'] == app_name for app in self.apps):
-                app_name = f"{original_app_name} ({counter})"
-                counter += 1
-            
-            # 添加应用到列表
             self.apps.append({
                 'name': app_name,
                 'path': file_path,
                 'icon': icon_path
             })
             
-            # 保存设置
             self.save_settings()
-            
-            # 更新界面
             self.update_app_buttons()
 
-    def extract_icon(self, exe_path):
-        try:
-            return self.process_manager.extract_icon(exe_path)
-        except Exception as e:
-            log.error(f"提取图标时出错: {e}")
-            return None
 
     def init_tooltip(self):
-        from PySide6.QtWidgets import QLabel
-        # 使用顶层无父窗口的 QLabel 作为 tooltip，避免构造参数差异导致异常
         self.tooltip = QLabel("", None)
         self.tooltip.setObjectName("DockIconTooltip")
         flags = Qt.ToolTip | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint
         self.tooltip.setWindowFlags(flags)
         self.tooltip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.tooltip.setStyleSheet("""
-            QLabel#DockIconTooltip {
+        self.tooltip.setStyleSheet(f"""
+            QLabel#DockIconTooltip {{
                 color: white;
                 font-family: 'Microsoft YaHei UI';
-				font-weight: Medium;
-				font-size: 14px;                         
-                background-color: #4a86e8;
+                font-weight: Medium;
+                font-size: 14px;
+                background-color: {DockConstants.COLOR_TOOLTIP};
                 border-radius: 5px;
                 padding: 8px 16px;
-            }
+            }}
         """)
         self.tooltip.hide()
 
@@ -963,28 +890,6 @@ class DockApp(QMainWindow):
         else:
             button.setStyleSheet(DockConstants.BUTTON_STYLE_INACTIVE)
 
-    def update_app_button_styles(self):
-        """更新所有应用按钮的样式"""
-        # 统一处理所有类型的应用
-        all_apps_with_containers = [
-            (self.pinned_apps, self.pinned_app_buttons),
-            (self.apps, self.app_buttons),
-            (self.running_apps_list, self.running_app_buttons)
-        ]
-        
-        for app_list, button_dict in all_apps_with_containers:
-            for app in app_list:
-                app_name = app['name']
-                if app_name in button_dict:
-                    button = button_dict[app_name]
-                    # 根据应用类型检查运行状态
-                    if app_list == self.running_apps_list:
-                        # 对于运行中应用，检查实际进程状态
-                        is_running = self.process_manager.is_process_running(app['path'])
-                    else:
-                        # 对于其他应用，检查是否在运行列表中
-                        is_running = app_name in self.running_apps
-                    self.set_button_style(button, is_running)
 
     def launch_app(self, path):
         try:
@@ -1004,8 +909,8 @@ class DockApp(QMainWindow):
         # sender 必须显式传入（来自 lambda），用于精确计算图标全局矩形
         try:
             self.hide_icon_tooltip()
-        except:
-            pass
+        except Exception as e:
+            log.debug(f"隐藏图标提示时出错: {e}")
 
         # 构建动作列表
         actions = []
@@ -1098,12 +1003,7 @@ class DockApp(QMainWindow):
         )
         
         if ok and new_name.strip():
-            # 检查是否有重复的应用名，如果有则添加后缀
-            counter = 1
-            original_new_name = new_name
-            while any(app['name'] == new_name for app in self.apps):
-                new_name = f"{original_new_name} ({counter})"
-                counter += 1
+            new_name = self._generate_unique_app_name(new_name.strip())
             
             # 更新应用名称
             app_data['name'] = new_name
@@ -1135,9 +1035,30 @@ class DockApp(QMainWindow):
 
     def open_settings(self):
         """打开设置对话框"""
-        dialog = SettingsDialog(self)
-        if dialog.exec():
-            pass
+        self.dialog = settings.SettingsUI(
+            version=VERSION,
+            config_path=self.settings_file,
+            on_save_callback=self.on_settings_saved
+        )
+        self.dialog.show()
+
+    def on_settings_saved(self, config_data):
+        """设置保存后的回调"""
+        dock_config = config_data.get('dock', {})
+        except_list = dock_config.get('except_processes', [])
+        if except_list and hasattr(self, 'process_manager') and self.process_manager:
+            try:
+                self.process_manager.set_except_processes(except_list)
+            except Exception:
+                pass
+
+        debug_enabled = config_data.get('debug', False)
+        if debug_enabled:
+            log.enable_debug()
+        else:
+            log.disable_debug()
+
+        log.info("设置已更新")
 
     def load_settings(self):
         try:
@@ -1158,6 +1079,8 @@ class DockApp(QMainWindow):
             
             # 确保加载设置后更新应用按钮
             self.update_app_buttons()
+            if dock_config.get('hide_taskbar', False):
+                sys32.show_window(sys32.HWND_TRAY)
         except Exception as e:
             log.exception(f"加载配置文件 {self.settings_file} 时出错")
             self.apps = []  # 出错时使用默认设置
@@ -1165,17 +1088,10 @@ class DockApp(QMainWindow):
 
     def save_settings(self):
         try:
-            settings = {
-                'dock': {
-                    'apps': self.apps,
-                    # 将 ProcessManager 的排除列表保存到配置
-                    'except_processes': getattr(self.process_manager, 'except_processes', [])
-                }
-            }
-            
-            success = Config.save_config(self.settings_file, settings)
-            if not success:
-                log.error(f"保存配置文件到 {self.settings_file} 失败")
+            config = Config.load_config(self.settings_file)
+            config['dock']['apps'] = self.apps
+            config['dock']['except_processes'] = getattr(self.process_manager, 'except_processes', [])
+            Config.save_config(self.settings_file, config)
         except Exception as e:
             log.exception(f"保存配置文件 {self.settings_file} 时出错")
 
@@ -1205,7 +1121,6 @@ class DockApp(QMainWindow):
     def open_terminal_admin(self):
         """打开管理员命令提示符"""
         try:
-            import subprocess
             subprocess.run(["powershell", "-Command", "Start-Process", "cmd.exe", "-Verb", "RunAs"])
         except Exception as e:
             self.handle_error(f"打开管理员命令提示符失败: {e}")
@@ -1290,101 +1205,6 @@ class DockApp(QMainWindow):
         super().showEvent(event)
         if self.hwnd is None:
             self.hwnd = int(self.winId())
-
-
-class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent = parent  # 保存父窗口引用
-        self.setWindowTitle("设置")
-        self.setFixedSize(480, 420)  # 略微增大窗口以容纳编辑区
-        # 启用透明背景以支持模糊效果
-        self.setAttribute(Qt.WA_TranslucentBackground)
-
-        layout = QVBoxLayout()
-
-
-
-        # 分隔说明
-        layout.addSpacing(8)
-        excl_label = QLabel("进程排除列表（每行一个，若只写名称将自动补 .exe）：")
-        excl_label.setAlignment(Qt.AlignLeft)
-        layout.addWidget(excl_label)
-        # 编辑区域：每行一个进程名
-        self.except_edit = QPlainTextEdit()
-        self.except_edit.setPlaceholderText("例如：\npython.exe\nexplorer.exe\nshellexperiencehost")
-        self.except_edit.setFixedHeight(120)
-        # 初始化内容（从 ProcessManager 读取当前列表）
-        try:
-            current = getattr(self.parent.process_manager, 'except_processes', [])
-            if current:
-                self.except_edit.setPlainText("\n".join(current))
-        except Exception:
-            pass
-        layout.addWidget(self.except_edit)
-
-        # 保存按钮
-        save_button = QPushButton("确定")
-        save_button.clicked.connect(self.accept)
-        layout.addWidget(save_button)
-
-        self.setLayout(layout)
-
-        # 添加独立的样式表
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #f0f0f0;
-                border-radius: 16px;
-            }
-            QLabel {
-                font-size: 14px;
-                color: #333;
-                padding: 5px;
-            }
-            QComboBox {
-                padding: 5px;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                min-height: 30px;
-            }
-            QComboBox:focus {
-                border: 2px solid #4a86e8;
-            }
-            QPushButton {
-                background-color: #4a86e8;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-size: 14px;
-                min-height: 30px;
-            }
-            QPushButton:hover {
-                background-color: #3a76d8;
-            }
-            QPushButton:pressed {
-                background-color: #2a66c8;
-            }
-        """)
-
-
-
-    def accept(self):
-        """重写accept方法以保存设置"""
-        # 应用并保存排除进程列表
-        try:
-            text = self.except_edit.toPlainText()
-            lines = [l.strip() for l in text.splitlines() if l.strip()]
-            if hasattr(self.parent, 'process_manager') and self.parent.process_manager:
-                self.parent.process_manager.set_except_processes(lines)
-        except Exception as e:
-            log.error(f"应用排除列表时出错: {e}")
-        # 保存设置到父窗口的配置文件
-        self.parent.save_settings()
-        super().accept()
-
-    def save_settings(self):
-        """保存设置"""
 
 
 def main():
