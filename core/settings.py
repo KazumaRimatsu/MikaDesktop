@@ -1,15 +1,16 @@
 import sys
 import os
 import winreg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QGroupBox, QHBoxLayout,
-    QLabel, QPlainTextEdit, QPushButton, QRadioButton,
-    QSizePolicy, QSpacerItem, QTabWidget, QTextEdit,
+    QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QSpacerItem, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget, QSpinBox)
 import datetime
 import requests
 import core.config_manager as Config
 from core import log_maker
+
+import BlurWindow.blurWindow as blurWindow
 
 log = log_maker.logger()
 
@@ -49,6 +50,7 @@ class SettingsUI(QDialog):
             self.config_data = Config.DEFAULT_CONFIG.copy()
 
     def init_ui(self):
+        self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(640, 480)
         self.setWindowTitle(f"{PROJ_NAME} - 设置")
         self.verticalLayout_3 = QVBoxLayout(self)
@@ -210,6 +212,10 @@ class SettingsUI(QDialog):
         self.load_settings_to_ui()
         self.upd_about_text()
 
+        QTimer.singleShot(100, self.apply_blur_effect)
+
+        self.upd_status("就绪")
+
     def load_settings_to_ui(self):
         debug_enabled = self.config_data.get('debug', False)
         self.enable_debug.setChecked(debug_enabled)
@@ -319,7 +325,7 @@ class SettingsUI(QDialog):
             self.status_label.setStyleSheet(u"color: #ff9900;")
             self.status_label.setText(text)
         else:
-            self.status_label.setStyleSheet(u"color: #000000;")
+            self.status_label.setStyleSheet(u"color: #0000FF;")
             self.status_label.setText(text)
 
     def check_update(self):
@@ -362,6 +368,14 @@ class SettingsUI(QDialog):
             .replace("&&LICENSE&&", LICENSE)
             .replace("&&CONTRIBUTION&&", CONTRIBUTION if contribution else "")
             .replace("&&UPDINFO&&", upd_text))
+        
+    def apply_blur_effect(self):
+        """应用窗口模糊效果"""
+        try:
+			# 使用GlobalBlur函数为窗口添加模糊效果
+            blurWindow.blur(self.winId(), hexColor=False, Dark=True)
+        except Exception as e:  
+            pass  # 静默失败，不影响对话框功能
 
 
 

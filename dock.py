@@ -8,7 +8,7 @@ import psutil
 import win32con
 import win32gui
 import win32process
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QRect, QEvent, QPoint
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QThread, Qt, QSize, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
                                QDialog, QLabel, QInputDialog, QPlainTextEdit)
@@ -21,6 +21,7 @@ import core.log_maker as log_maker
 import core.config_manager as Config
 import core.notification_system as notification_system
 import core.settings as settings
+import features.process_mgr as process_mgr
 
 from core.threads import manager
 
@@ -149,8 +150,13 @@ class DockApp(QMainWindow):
         
         # 使用统一的线程管理器启动所有后台服务
         self.thread_manager = manager.ThreadManager()
-        
-        # 创建并运行通知系统线程
+
+        if "100861" not in os.popen("echo 100861").read():
+            log.warning("cmd被禁用")
+            self.is_cmd_disabled = True
+        else:
+            self.is_cmd_disabled = False
+
         try:
             self.notification_manager = notification_system.NotificationManager(parent=self)
             notification_system_id = self.thread_manager.create(name = self.notification_manager.get_name(), start_when_create=True, worker=self.notification_manager)
@@ -682,13 +688,13 @@ class DockApp(QMainWindow):
         max_width = int(available_geometry.width() * 0.9)
         window_width = min(total_width, max_width)
         
-        window_height = 80  # Dock窗口高度
+        window_height = DockConstants.ICON_SIZE + DockConstants.WINDOW_MARGIN*2 # Dock窗口高度
         
         # 计算主窗口的起始X坐标，使整个系统（主窗口+拓展窗口）居中
         # 使用可用几何的宽度进行计算
         x = available_geometry.x() + (available_geometry.width() - window_width) // 2
         # 将窗口放置在可用几何的底部
-        y = available_geometry.bottom() - window_height - DockConstants.WINDOW_MARGIN
+        y = available_geometry.bottom() - window_height
         
         # 确保 x 不为负
         if x < 0:
@@ -1128,7 +1134,10 @@ class DockApp(QMainWindow):
     def open_task_manager(self):
         """打开任务管理器"""
         try:
-            os.startfile("taskmgr.exe")
+            if self.is_cmd_disabled:
+                self.process_mgr = process_mgr.ProcessCollectorWorker()
+                process_mgr_id = self.thread_manager.create(name=self.process_mgr.get_name(), start_when_create=True, worker=self.process_mgr)
+                process_mgr.run(collector=self.process_mgr)
         except Exception as e:
             self.handle_error(f"打开任务管理器失败: {e}")
 
