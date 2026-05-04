@@ -352,14 +352,15 @@ class ProcessManager:
             return None
 
     def is_window_fullscreen(self, hwnd) -> bool:
-        """判断给定窗口句柄是否处于全屏状态（使用更准确的方法）"""
+        """判断给定窗口句柄是否处于全屏状态"""
         try:
             if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
                 return False
             
-            sys32.USER32.SetProcessDPIAware()
+            sys32._user32.SetProcessDPIAware()
             rect = sys32.get_window_rect(hwnd)
-            return (rect[2] >= sys32.REAL_SCREEN_WIDTH and rect[3] >= sys32.REAL_SCREEN_HEIGHT) or rect == sys32.REAL_SCREEN_RECT
+            #print(rect)
+            return (rect[2] >= sys32.REAL_SCREEN_WIDTH and rect[3] >= sys32.REAL_SCREEN_HEIGHT)
         except Exception:
             return False
 

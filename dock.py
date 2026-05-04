@@ -1,6 +1,7 @@
 import gc
 import os
 import sys
+import hashlib
 from typing import Dict, List, Any
 import subprocess
 
@@ -140,6 +141,10 @@ class DockApp(QMainWindow):
         self._is_hidden = False
         self.hwnd = None
         
+        # 图标版本管理
+        self._uid_counter = 0
+        self._list_versions: Dict[str, str] = {}
+        
         self.init_ui()
         self.load_settings()
         self.load_pinned_apps()
@@ -194,6 +199,7 @@ class DockApp(QMainWindow):
                          layout: QHBoxLayout, is_running_app: bool = False) -> QPushButton:
         """创建统一的应用按钮"""
         app_name = app_data['name']
+        uid = self._assign_uid(app_data)
         
         # 确保图标存在
         icon_path = app_data.get('icon') or ''
@@ -206,6 +212,7 @@ class DockApp(QMainWindow):
         button = QPushButton()
         button.setFixedSize(DockConstants.BUTTON_SIZE, DockConstants.BUTTON_SIZE)
         button.setMouseTracking(True)
+        button._bound_uid = uid
         
         # 设置图标
         if icon_path and os.path.exists(icon_path):
@@ -338,76 +345,33 @@ class DockApp(QMainWindow):
         self.process_timer.start(DockConstants.PROCESS_CHECK_INTERVAL)
 
     def check_running_processes(self):
-        """检查所有应用的运行状态 - 只考虑有窗口的应用"""
+        """检查所有应用的运行状态"""
         try:
-            # 创建当前运行应用的快照
             current_running = {}
             
-            # 检查固定应用
             for app in self.pinned_apps:
-                app_name = app['name']
-                app_path = app['path']
-                
-                # 使用进程管理器检查进程状态（仅当有可见窗口时）
-                is_running = self.process_manager.is_process_running(app_path)
-                if is_running:
-                    current_running[app_name] = app_path
+                if self.process_manager.is_process_running(app['path']):
+                    current_running[app['name']] = app['path']
         
-            # 检查用户添加的应用
             for app in self.apps:
-                app_name = app['name']
-                app_path = app['path']
-                
-                # 使用进程管理器检查进程状态（仅当有可见窗口时）
-                is_running = self.process_manager.is_process_running(app_path)
-                if is_running:
-                    current_running[app_name] = app_path
+                if self.process_manager.is_process_running(app['path']):
+                    current_running[app['name']] = app['path']
         
-            # 检查系统中所有正在运行的进程，找出未添加但运行的应用
-            # 使用进程管理器获取所有正在运行的进程
             all_apps_paths = [app['path'] for app in self.pinned_apps + self.apps]
             running_processes = self.process_manager.get_running_processes(all_apps_paths)
-            
-            # 更新运行中应用列表
             self.running_apps_list = list(running_processes.values())
             
-            # 找出状态发生变化的应用
-            apps_to_update = set()
+            for app_name in set(list(self.running_apps.keys()) + list(current_running.keys())):
+                if (app_name in self.running_apps) != (app_name in current_running):
+                    button = self.get_app_button(app_name)
+                    if button:
+                        is_running = app_name in current_running
+                        self.set_button_style(button, is_running)
+                        log.info(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
             
-            # 检查新启动的应用
-            for app_name in current_running:
-                if app_name not in self.running_apps:
-                    apps_to_update.add(app_name)
-            
-            # 检查已关闭的应用
-            for app_name in self.running_apps:
-                if app_name not in current_running:
-                    apps_to_update.add(app_name)
-            
-            # 更新所有类型的应用按钮
-            for app_name in apps_to_update:
-                button = self.get_app_button(app_name)
-                if button:
-                    is_running = app_name in current_running
-                    self.set_button_style(button, is_running)
-                    log.info(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
-            
-            # 更新运行中应用按钮
-            for app_info in self.running_apps_list:
-                app_name = app_info['name']
-                if app_name in self.running_app_buttons:
-                    button = self.running_app_buttons[app_name]
-                    is_running = self.process_manager.is_process_running(app_info['path'])
-                    self.set_button_style(button, is_running)
-            
-            # 更新运行应用记录
             self.running_apps = current_running
-            
-            # 更新界面
             self.update_app_buttons()
 
-            # 根据当前运行的应用（仅限 dock栏中的应用）调整 dock栏的显示/隐藏，
-            # 以避免遮挡全屏程序（例如全屏视频/浏览器）
             try:
                 self.adjust_window_stacking()
             except Exception as e:
@@ -450,6 +414,8 @@ class DockApp(QMainWindow):
         try:
             sys32.show_window(self.hwnd)
             self._is_hidden = False
+            self.update_app_buttons()
+            self.update_window_position()
             log.info("dock栏显示")
         except Exception as e:
             log.error(f"显示dock栏时出错: {e}")
@@ -847,33 +813,88 @@ class DockApp(QMainWindow):
         for i in reversed(range(layout.count())):
             widget = layout.itemAt(i).widget()
             if widget is not None:
+                layout.removeWidget(widget)
+                widget.hide()
                 widget.setParent(None)
-    
-    def update_app_buttons(self):
-        """更新所有应用按钮"""
-        # 清空现有按钮
-        self.clear_layout(self.pinned_app_layout)
-        self.clear_layout(self.app_layout)
-        self.clear_layout(self.running_app_layout)
-        
-        # 重置按钮字典
-        self.pinned_app_buttons.clear()
-        self.app_buttons.clear()
-        self.running_app_buttons.clear()
-        
-        # 添加固定应用按钮
-        for app in self.pinned_apps:
-            self.create_app_button(app, self.pinned_app_buttons, self.pinned_app_layout)
-        
-        # 添加用户添加的应用按钮
-        for app in self.apps:
-            self.create_app_button(app, self.app_buttons, self.app_layout)
-        
-        # 添加运行中的应用按钮
-        for app in self.running_apps_list:
-            self.create_app_button(app, self.running_app_buttons, self.running_app_layout, is_running_app=True)
-        
-        # 更新所有容器的可见性
+                widget.deleteLater()
+
+    def _assign_uid(self, app_data: Dict[str, Any]) -> int:
+        """为应用数据分配唯一标识符，确保图标-按钮一对一绑定"""
+        if '_uid' not in app_data:
+            self._uid_counter += 1
+            app_data['_uid'] = self._uid_counter
+        return app_data['_uid']
+
+    def _compute_list_hash(self, app_list: List[Dict[str, Any]]) -> str:
+        """计算应用列表的内容哈希（基于稳定字段 path+name），用于版本比对"""
+        content = '|'.join(
+            f"{app.get('path', '')}::{app.get('name', '')}"
+            for app in app_list
+        )
+        return hashlib.md5(content.encode()).hexdigest()
+
+    def _rebuild_section(self, app_list: List[Dict[str, Any]],
+                         button_dict: Dict[str, QPushButton],
+                         layout: QHBoxLayout,
+                         is_running_section: bool = False) -> None:
+        """重建单个分区的所有按钮"""
+        self.clear_layout(layout)
+        button_dict.clear()
+        for app in app_list:
+            self.create_app_button(app, button_dict, layout, is_running_app=is_running_section)
+
+    def _validate_button_positions(self) -> None:
+        """校验按钮位置完整性：检查绑定有效、位置对应、容器不溢出"""
+        sections = [
+            (self.pinned_apps, self.pinned_app_buttons, self.pinned_app_layout, 'pinned'),
+            (self.apps, self.app_buttons, self.app_layout, 'apps'),
+            (self.running_apps_list, self.running_app_buttons, self.running_app_layout, 'running'),
+        ]
+        for app_list, button_dict, layout, name in sections:
+            if not app_list and not button_dict:
+                continue
+            widget_count = layout.count()
+            expected_count = len(app_list)
+            if widget_count != expected_count:
+                log.warning(f"[{name}] 按钮数({widget_count})与应用数({expected_count})不匹配")
+                continue
+            bound_uids = set()
+            for i in range(widget_count):
+                widget = layout.itemAt(i).widget()
+                if widget is None:
+                    log.warning(f"[{name}] 位置 {i} 为空")
+                    continue
+                uid = getattr(widget, '_bound_uid', None)
+                if uid is None or uid == 0:
+                    log.warning(f"[{name}] 位置 {i} 按钮缺少绑定UID")
+                    continue
+                if uid in bound_uids:
+                    log.warning(f"[{name}] 按钮UID重复: {uid}")
+                bound_uids.add(uid)
+
+    def update_app_buttons(self) -> None:
+        """增量更新所有应用按钮 - 仅当列表哈希变化时重建对应分区"""
+        sections = [
+            ('pinned', self.pinned_apps, self.pinned_app_buttons, self.pinned_app_layout, False),
+            ('apps', self.apps, self.app_buttons, self.app_layout, False),
+            ('running', self.running_apps_list, self.running_app_buttons, self.running_app_layout, True),
+        ]
+        any_rebuilt = False
+        for section_name, app_list, button_dict, layout, is_running_section in sections:
+            new_hash = self._compute_list_hash(app_list)
+            if self._list_versions.get(section_name) != new_hash:
+                log.debug(f"[{section_name}] 版本变化，重建按钮")
+                self._rebuild_section(app_list, button_dict, layout, is_running_section)
+                self._list_versions[section_name] = new_hash
+                any_rebuilt = True
+
+        if any_rebuilt:
+            self._update_container_visibility()
+            self._validate_button_positions()
+            self.update_window_position()
+
+    def _update_container_visibility(self) -> None:
+        """更新容器和分隔符的可见性"""
         pinned_apps_visible = len(self.pinned_apps) > 0
         user_apps_visible = len(self.apps) > 0
         running_apps_visible = len(self.running_apps_list) > 0
@@ -882,13 +903,9 @@ class DockApp(QMainWindow):
         self.app_container.setVisible(user_apps_visible)
         self.running_app_container.setVisible(running_apps_visible)
         
-        # 更新分隔符可见性（仅在相邻容器都可见时显示）
         self.separator.setVisible(pinned_apps_visible and user_apps_visible)
         self.running_separator.setVisible(user_apps_visible and running_apps_visible)
-        
-        # 更新窗口位置以反映宽度变化
-        self.update_window_position()
-        
+
     def set_button_style(self, button, is_running):
         """设置按钮样式，根据运行状态"""
         if is_running:
@@ -1138,6 +1155,8 @@ class DockApp(QMainWindow):
                 self.process_mgr = process_mgr.ProcessCollectorWorker()
                 process_mgr_id = self.thread_manager.create(name=self.process_mgr.get_name(), start_when_create=True, worker=self.process_mgr)
                 process_mgr.run(collector=self.process_mgr)
+            else:
+                subprocess.run(["taskmgr.exe"])
         except Exception as e:
             self.handle_error(f"打开任务管理器失败: {e}")
 

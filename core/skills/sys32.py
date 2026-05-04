@@ -4,6 +4,10 @@ import win32con
 import win32gui
 import win32print
 
+global _user32, _shell32
+_user32 = windll.user32
+_shell32 = windll.shell32
+
 HDC = win32gui.GetDC(0)
 SCREEN_RECT = (0, 0, windll.user32.GetSystemMetrics(0), windll.user32.GetSystemMetrics(1))
 REAL_SCREEN_RECT = (0, 0, win32print.GetDeviceCaps(HDC, win32con.DESKTOPHORZRES), win32print.GetDeviceCaps(HDC, win32con.DESKTOPVERTRES))
@@ -34,10 +38,20 @@ IDRETRY = win32con.IDRETRY
 IDCANCEL = win32con.IDCANCEL
 
 def get_user32():
-    return windll.user32
+    return _user32
+
+def refresh_user32():
+    _user32 = windll.user32
+    get_user32()
 
 def get_shell32():
-    return windll.shell32
+    return _shell32
+
+def refresh_shell32():
+    _shell32 = windll.shell32
+    get_shell32()
+
+
 
 def get_hwnd(title: str):
     return win32gui.FindWindow(title, None)
