@@ -65,6 +65,9 @@ class SettingsUI(QDialog):
         self.enable_debug = QCheckBox(self.general)
         self.verticalLayout_5.addWidget(self.enable_debug)
 
+        self.nocmd_mode = QCheckBox(self.general)
+        self.verticalLayout_5.addWidget(self.nocmd_mode)
+
         self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         self.verticalLayout_5.addItem(self.verticalSpacer)
 
@@ -79,7 +82,7 @@ class SettingsUI(QDialog):
         self.verticalLayout.addWidget(self.except_apps_tips_label)
 
         self.plainTextEdit = QPlainTextEdit(self.except_apps)
-        self.plainTextEdit.setStyleSheet(u"background: #EEEEEE")
+        self.plainTextEdit.setStyleSheet(u"background: #F8F9FA")
         self.plainTextEdit.setDocumentTitle(u"")
         self.plainTextEdit.setPlaceholderText(u"例如：notepad.exe\\nmsedge.exe")
         self.verticalLayout.addWidget(self.plainTextEdit)
@@ -131,9 +134,9 @@ class SettingsUI(QDialog):
         self.horizontalLayout_3 = QHBoxLayout()
         self.check_upd_button = QPushButton(self.about)
         self.check_upd_button.setStyleSheet(u"QPushButton {\n"
-"                background-color: #DDDDDD;\n"
-"                color: black;\n"
-"                border: none;\n"
+"                background-color: #F8F9FA;\n"
+"                color: #212529;\n"
+"                border: 1px solid #ADB5BD;\n"
 "                border-radius: 5px;\n"
 "                padding: 12px;\n"
 "                font-size: 15px;\n"
@@ -142,10 +145,13 @@ class SettingsUI(QDialog):
 "                min-height: 20px;\n"
 "            }\n"
 "            QPushButton:hover {\n"
-"                background-color: #CCCCCC;\n"
+"                background-color: #80E0D7;\n"
+"                border: 1px solid #39C5BB;\n"
 "            }\n"
 "            QPushButton:pressed {\n"
-"                background-color: #BBBBBB;\n"
+"                background-color: #2A9A91;\n"
+"                border: 1px solid #2A9A91;\n"
+"                color: white;\n"
 "            }")
 
         self.horizontalLayout_3.addWidget(self.check_upd_button)
@@ -168,7 +174,7 @@ class SettingsUI(QDialog):
         self.horizontalLayout.addItem(self.horizontalSpacer)
         self.save_button = QPushButton(self)
         self.save_button.setStyleSheet(u"QPushButton {\n"
-"                background-color: #00c0aa;\n"
+"                background-color: #39C5BB;\n"
 "                color: white;\n"
 "                border: none;\n"
 "                border-radius: 5px;\n"
@@ -179,10 +185,12 @@ class SettingsUI(QDialog):
 "                min-height: 20px;\n"
 "            }\n"
 "            QPushButton:hover {\n"
-"                background-color: #00A894;\n"
+"                background-color: #80E0D7;\n"
+"                color: #212529;\n"
 "            }\n"
 "            QPushButton:pressed {\n"
-"                background-color: #008979;\n"
+"                background-color: #2A9A91;\n"
+"                color: white;\n"
 "            }")
 
         self.horizontalLayout.addWidget(self.save_button)
@@ -191,6 +199,7 @@ class SettingsUI(QDialog):
 
         self.enable_autostart.setText(u"开机时自动运行")
         self.enable_debug.setText(u"启用debug日志")
+        self.nocmd_mode.setText(u"脱离命令提示符")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.general), u"通用")
         self.except_apps.setTitle(u"排除的应用")
         self.except_apps_tips_label.setText(u"键入进程名（每行一个，无需.exe后缀）")
@@ -198,7 +207,7 @@ class SettingsUI(QDialog):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.notify), u"通知")
         self.notify_group.setTitle(u"通知选项")
         self.notify_timeout_label.setText(u"默认通知超时时间：")
-        self.notify_desc_label.setText(u"通知使用 HTTP 服务器在 127.0.0.2:8848 监听。\n支持 title、context、level、type、timelimit 等参数。\n交互式通知使用 '+' 分隔选项，最多 4 个。")
+        self.notify_desc_label.setText(u"通知使用 WebSocket 服务器在 ws://127.0.0.1:8848 监听。\n发送 JSON 消息，支持 title、context、level、type、timelimit 等字段。\n交互式通知通过 choice 数组传递选项，最多 4 个。")
         self.about_text.setText(ABOUT_TEXT)
         self.check_upd_button.setText(u"检查更新")
         self.check_upd_button.clicked.connect(self.check_update)
@@ -208,8 +217,11 @@ class SettingsUI(QDialog):
         self.tabWidget.setCurrentIndex(1)
 
         self.save_button.clicked.connect(self.save_settings)
-
         self.load_settings_to_ui()
+
+        # 加载nocmd_mode设置
+        nocmd_mode_enabled = self.config_data.get('nocmd_mode', False)
+        self.nocmd_mode.setChecked(nocmd_mode_enabled)
         self.upd_about_text()
 
         QTimer.singleShot(100, self.apply_blur_effect)
@@ -285,7 +297,7 @@ class SettingsUI(QDialog):
 
         notify_config = self.config_data.get('notify', {})
         notify_config['default_timeout'] = self.notify_timeout_spin.value()
-
+        self.config_data['nocmd_mode'] = self.nocmd_mode.isChecked()
         self.config_data['debug'] = self.enable_debug.isChecked()
         self.config_data['dock'] = dock_config
         self.config_data['notify'] = notify_config
@@ -316,16 +328,16 @@ class SettingsUI(QDialog):
 
     def upd_status(self, text: str, status_type: str = None):
         if status_type == "success":
-            self.status_label.setStyleSheet(u"color: #53b482;")
+            self.status_label.setStyleSheet(u"color: #4DB6AC;")  # Success
             self.status_label.setText(text)
         elif status_type == "error":
-            self.status_label.setStyleSheet(u"color: #ff0000;")
+            self.status_label.setStyleSheet(u"color: #EF5350;")  # Error
             self.status_label.setText(text)
         elif status_type == "warning":
-            self.status_label.setStyleSheet(u"color: #ff9900;")
+            self.status_label.setStyleSheet(u"color: #FFB74D;")  # Warning
             self.status_label.setText(text)
         else:
-            self.status_label.setStyleSheet(u"color: #0000FF;")
+            self.status_label.setStyleSheet(u"color: #39C5BB;")  # Primary
             self.status_label.setText(text)
 
     def check_update(self):

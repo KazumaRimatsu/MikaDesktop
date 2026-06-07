@@ -4,7 +4,6 @@ from PySide6.QtGui import QCursor, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel)
 import BlurWindow.blurWindow as blurWindow
 import core.log_maker as log_maker
-import core.skills.sys32 as sys32
 import os
 
 # 添加Windows API导入，用于输入法切换
@@ -232,7 +231,7 @@ class ShutdownDialog(QDialog):
 		logout_btn = QPushButton("注销")
 		logout_btn.setStyleSheet("""
             QPushButton {
-                background-color: #2196F3;
+                background-color: #64B5F6;
                 color: white;
                 border: none;
                 border-radius: 5px;
@@ -243,10 +242,10 @@ class ShutdownDialog(QDialog):
                 min-height: 20px;
             }
             QPushButton:hover {
-                background-color: #1976D2;
+                background-color: #42A5F5;
             }
             QPushButton:pressed {
-                background-color: #0D47A1;
+                background-color: #1E88E5;
             }
         """)
 		logout_btn.clicked.connect(lambda: self.select_action("logout"))
@@ -256,7 +255,7 @@ class ShutdownDialog(QDialog):
 		restart_btn = QPushButton("重启")
 		restart_btn.setStyleSheet("""
             QPushButton {
-                background-color: #FF9800;
+                background-color: #FFB74D;
                 color: white;
                 border: none;
                 border-radius: 5px;
@@ -267,10 +266,10 @@ class ShutdownDialog(QDialog):
                 min-height: 20px;
             }
             QPushButton:hover {
-                background-color: #F57C00;
+                background-color: #FFA726;
             }
             QPushButton:pressed {
-                background-color: #E65100;
+                background-color: #FB8C00;
             }
         """)
 		restart_btn.clicked.connect(lambda: self.select_action("restart"))
@@ -280,7 +279,7 @@ class ShutdownDialog(QDialog):
 		shutdown_btn = QPushButton("关机")
 		shutdown_btn.setStyleSheet("""
             QPushButton {
-                background-color: #F44336;
+                background-color: #EF5350;
                 color: white;
                 border: none;
                 border-radius: 5px;
@@ -291,10 +290,10 @@ class ShutdownDialog(QDialog):
                 min-height: 20px;
             }
             QPushButton:hover {
-                background-color: #D32F2F;
+                background-color: #E53935;
             }
             QPushButton:pressed {
-                background-color: #B71C1C;
+                background-color: #C62828;
             }
         """)
 		shutdown_btn.clicked.connect(lambda: self.select_action("shutdown"))
@@ -304,7 +303,7 @@ class ShutdownDialog(QDialog):
 		cancel_btn = QPushButton("取消")
 		cancel_btn.setStyleSheet("""
             QPushButton {
-                background-color: #9E9E9E;
+                background-color: #6C757D;
                 color: white;
                 border: none;
                 border-radius: 5px;
@@ -315,10 +314,10 @@ class ShutdownDialog(QDialog):
                 min-height: 20px;
             }
             QPushButton:hover {
-                background-color: #757575;
+                background-color: #5A6268;
             }
             QPushButton:pressed {
-                background-color: #616161;
+                background-color: #495057;
             }
         """)
 		cancel_btn.clicked.connect(self.reject)

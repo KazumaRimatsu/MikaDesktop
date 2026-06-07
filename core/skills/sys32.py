@@ -1,20 +1,14 @@
 from ctypes import windll
-import os
 import win32con
 import win32gui
 import win32print
 
-global _user32, _shell32
 _user32 = windll.user32
-_shell32 = windll.shell32
 
-HDC = win32gui.GetDC(0)
-SCREEN_RECT = (0, 0, windll.user32.GetSystemMetrics(0), windll.user32.GetSystemMetrics(1))
-REAL_SCREEN_RECT = (0, 0, win32print.GetDeviceCaps(HDC, win32con.DESKTOPHORZRES), win32print.GetDeviceCaps(HDC, win32con.DESKTOPVERTRES))
-REAL_SCREEN_WIDTH = win32print.GetDeviceCaps(HDC, win32con.DESKTOPHORZRES)
-REAL_SCREEN_HEIGHT = win32print.GetDeviceCaps(HDC, win32con.DESKTOPVERTRES)
-SCREEN_WIDTH = REAL_SCREEN_RECT[2]
-SCREEN_HEIGHT = REAL_SCREEN_RECT[3]
+_hdc = win32gui.GetDC(0)
+REAL_SCREEN_WIDTH = win32print.GetDeviceCaps(_hdc, win32con.DESKTOPHORZRES)
+REAL_SCREEN_HEIGHT = win32print.GetDeviceCaps(_hdc, win32con.DESKTOPVERTRES)
+win32gui.ReleaseDC(0, _hdc)
 
 
 
@@ -37,33 +31,14 @@ IDNO = win32con.IDNO
 IDRETRY = win32con.IDRETRY
 IDCANCEL = win32con.IDCANCEL
 
-def get_user32():
-    return _user32
-
-def refresh_user32():
-    _user32 = windll.user32
-    get_user32()
-
-def get_shell32():
-    return _shell32
-
-def refresh_shell32():
-    _shell32 = windll.shell32
-    get_shell32()
-
-
-
-def get_hwnd(title: str):
-    return win32gui.FindWindow(title, None)
-
 def get_window_rect(hwnd: int):
     return win32gui.GetWindowRect(hwnd)
 
 def hide_window(hwnd: int):
-    get_user32().ShowWindow(hwnd, win32con.SW_HIDE)
+    _user32.ShowWindow(hwnd, win32con.SW_HIDE)
 
 def show_window(hwnd: int):
-    get_user32().ShowWindow(hwnd, win32con.SW_SHOW)
+    _user32.ShowWindow(hwnd, win32con.SW_SHOW)
 
 def messagebox(title: str, text: str, buttons: int = MB_OK) -> int:
     """
@@ -75,4 +50,4 @@ def messagebox(title: str, text: str, buttons: int = MB_OK) -> int:
     Returns:
         int: 按钮索引
        """
-    return get_user32().MessageBoxW(0, text, title, buttons)
+    return _user32.MessageBoxW(0, text, title, buttons)

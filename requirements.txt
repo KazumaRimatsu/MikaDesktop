@@ -7,3 +7,4 @@ pywin32
 requests
 typing_extensions
 BlurWindow
+websockets

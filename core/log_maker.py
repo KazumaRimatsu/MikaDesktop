@@ -7,6 +7,7 @@ class logger:
     _initialized = False
     
     def __init__(self):
+        self.is_debug = False
         if not logger._initialized:
             # 只添加文件处理器，loguru默认已经有stderr处理器了
             log.add(f"log/{datetime.datetime.now().strftime('%Y-%m-%d')}.log")

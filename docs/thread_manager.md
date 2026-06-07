@@ -420,7 +420,7 @@ monitor_thread.start()
 ### 1. 线程命名规范
 
 - 使用有意义的线程名称，便于调试和监控
-- 建议格式：`功能模块_具体任务`，如 `Notification_Server`、`AccidentalTouch_Monitor`
+- 建议格式：`功能模块_具体任务`，如 `NotificationManager`、`AccidentalTouch_Monitor`
 
 ### 2. 错误处理
 

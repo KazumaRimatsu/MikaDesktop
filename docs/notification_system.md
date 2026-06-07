@@ -2,255 +2,295 @@
 
 ## 概述
 
-通知系统是一个基于HTTP API的通知处理与显示系统，随dock.py一起启动。它提供了一个简单的API接口，允许其他应用程序发送通知到屏幕上显示。系统支持普通通知和交互式通知，并可以等待用户选择后返回结果。
+通知系统是一个 WebSocket 客户端模块，作为 dock.py 的内置组件运行。它连接到外部的 WebSocket 通知服务器，通过标准的身份验证→订阅→推送流程接收通知，并在屏幕上以浮窗形式展示。支持普通通知和交互式通知（带选项按钮），同时具备自动重连、心跳保活等生产级特性。
 
-## 快速开始
+## 架构变更（v2）
 
-1. 启动dock.py应用程序
-2. 通知系统会自动启动，监听在 `127.0.0.2:8848`
-3. 使用HTTP GET或POST请求发送通知
+通知系统已从 **HTTP 服务器模式**重构为 **WebSocket 客户端模式**：
 
-## API
+| 旧架构（废弃） | 新架构 |
+|---|---|
+| 内置 HTTP Server，监听 `127.0.0.2:8848` | 作为客户端连接外部 WebSocket 服务器 |
+| 通过 GET/POST 请求接收通知 | 遵循标准协议：认证 → 订阅 → 推送 |
+| 无连接状态管理 | 状态机：CONNECTING → AUTH → SUBSCRIBE → CONNECTED |
+| 无自动重连 | 指数退避自动重连 + 心跳保活 |
 
-### 发送通知
+## 架构概览
 
-**端点**: `POST http://127.0.0.2:8848/notify`
+```
+┌─────────────────────────────────────────────────┐
+│                 外部 WebSocket 服务器              │
+│  (独立部署，ws://host:port)                       │
+└──────────────┬──────────────────────┬────────────┘
+               │ ① 连接              │ ④ 推送通知
+               ▼                      ▼
+┌─────────────────────────────────────────────────┐
+│              NotificationClient                   │
+│  认证 → 订阅 → 消息循环 → 自动重连                │
+└──────────────────────┬──────────────────────────┘
+                       │ Qt Signal (跨线程)
+                       ▼
+┌─────────────────────────────────────────────────┐
+│             NotificationWindow (UI)              │
+│         浮窗显示、交互按钮、动画效果               │
+└─────────────────────────────────────────────────┘
+```
 
-**请求头**:
+## 连接配置
 
-- `Content-Type: application/json`
+通知系统的配置项存储在 `settings.json` 的 `notify` 字段中：
 
-**请求体（JSON格式）**:
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `ws_url` | `ws://127.0.0.2:8848` | WebSocket 服务器地址 |
+| `auth_token` | `""` | 身份验证令牌（空则不验证） |
+| `client_id` | `"dock"` | 客户端标识 |
+| `topics` | `["notification"]` | 订阅主题列表 |
+| `reconnect_delay` | `3` | 重连初始延迟（秒） |
+| `reconnect_max_retries` | `0` | 最大重连次数（0=无限） |
+| `default_timeout` | `0` | 默认通知超时（秒，0=不超时） |
+
+## 通信协议
+
+通知系统使用 JSON 格式的 WebSocket 消息与服务器通信。以下是完整的协议定义：
+
+### 1. 身份验证
+
+客户端连接后，首先发送认证消息：
 
 ```json
 {
-  "title": "通知标题",
-  "context": "通知内容",
-  "level": "default",
-  "type": "default",
-  "timelimit": 5,
-  "icon": "图标路径",
-  "choice": ["选项1", "选项2", "选项3"],
-  "wait": true
+  "type": "auth",
+  "token": "your_auth_token",
+  "client_id": "dock",
+  "version": 1
 }
 ```
 
-**参数说明**:
-
-| 参数名         | 类型      | 必需                     | 说明                                        |
-| ----------- | ------- | ---------------------- | ----------------------------------------- |
-| `title`     | string  | 是                      | 通知标题                                      |
-| `context`   | string  | 是                      | 通知内容                                      |
-| `level`     | string  | 是                      | 通知等级：`default`（默认）、`warn`（警告）、`error`（错误） |
-| `type`      | string  | 是                      | 通知类型：`default`（默认）、`interaction`（交互式）     |
-| `timelimit` | integer | 否                      | 超时时间（秒），1-60，默认5秒                         |
-| `icon`      | string  | 否                      | 图标文件路径                                    |
-| `choice`    | array   | 当`type=interaction`时必需 | 选项列表，最多4个选项                               |
-| `wait`      | boolean | 否                      | 是否等待用户选择，仅对交互式通知有效，默认false                |
-
-### 响应格式
-
-所有请求都返回JSON格式的响应：
-
-#### 成功响应
+服务器必须回复：
 
 ```json
 {
-  "status": "success",
-  "message": "Notification received"
+  "type": "auth_result",
+  "status": "success"
 }
 ```
 
-#### 交互式通知等待响应
+认证失败时客户端将断开连接并记录错误。
 
-当`wait=true`且`type=interaction`时，服务器会等待用户选择后返回：
+### 2. 主题订阅
+
+认证成功后，客户端发送订阅请求：
 
 ```json
 {
+  "type": "subscribe",
+  "topics": ["notification"]
+}
+```
+
+服务器回复：
+
+```json
+{
+  "type": "subscribe_result",
   "status": "success",
+  "topics": ["notification"]
+}
+```
+
+### 3. 通知推送
+
+服务器向客户端推送通知消息：
+
+```json
+{
+  "type": "notification",
+  "data": {
+    "title": "通知标题",
+    "context": "通知内容",
+    "level": "default",
+    "type": "default",
+    "timeout": 5,
+    "icon": "图标路径",
+    "choices": ["选项1", "选项2"]
+  },
+  "interaction_id": "uuid"           // 交互式通知时携带
+}
+```
+
+**data 字段说明**：
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `title` | string | 是 | 通知标题 |
+| `context` | string | 是 | 通知内容 |
+| `level` | string | 否 | `default` / `warn` / `error`，默认 `default` |
+| `type` | string | 否 | `default` / `interaction`，默认 `default` |
+| `timeout` | integer | 否 | 自动关闭秒数，1-60 |
+| `icon` | string | 否 | 图标文件路径 |
+| `choices` | array | 当 type=interaction 时必需 | 选项列表，最多 4 个 |
+
+### 4. 交互响应
+
+当用户点击交互式通知的按钮时，客户端向服务器回传结果：
+
+```json
+{
+  "type": "interaction_response",
+  "interaction_id": "uuid",
   "choice": "用户选择的选项"
 }
 ```
 
-#### 超时响应
+### 5. 心跳保活
+
+客户端每隔 25 秒发送心跳：
 
 ```json
-{
-  "status": "timeout",
-  "message": "No choice made before timeout"
-}
+{ "type": "ping" }
 ```
 
-#### 错误响应
+服务器回复：
+
+```json
+{ "type": "pong" }
+```
+
+### 6. 服务端错误
+
+服务器可主动推送错误消息：
 
 ```json
 {
-  "status": "error",
+  "type": "error",
   "message": "错误描述"
 }
 ```
 
-## 使用示例
+## 连接状态机
 
-### Python示例
+客户端内部维护以下状态，可通过 `connectionStateChanged` 信号监听：
 
-#### 使用GET请求（已弃用）
-
-```python
-import requests
-
-# 默认通知（5秒后自动关闭）
-response = requests.get("http://127.0.0.2:8848/notify", params={
-    "title": "测试通知",
-    "context": "这是一个测试通知内容",
-    "level": "default",
-    "type": "default",
-    "timelimit": "5"
-})
-
-# 警告通知
-response = requests.get("http://127.0.0.2:8848/notify", params={
-    "title": "警告",
-    "context": "这是一个警告通知，请注意！",
-    "level": "warn",
-    "type": "default",
-    "timelimit": "3"
-})
-
-# 错误通知
-response = requests.get("http://127.0.0.2:8848/notify", params={
-    "title": "错误",
-    "context": "发生了一个错误，请检查！",
-    "level": "error",
-    "type": "default"
-})
-
-# 交互式通知（不等待）
-response = requests.get("http://127.0.0.2:8848/notify", params={
-    "title": "请选择",
-    "context": "请选择一个选项",
-    "level": "default",
-    "type": "interaction",
-    "choice": "确认+取消+稍后提醒"
-})
-
-# 交互式通知（等待用户选择）
-response = requests.get("http://127.0.0.2:8848/notify", params={
-    "title": "请选择",
-    "context": "请选择一个选项",
-    "level": "default",
-    "type": "interaction",
-    "choice": "是+否",
-    "wait": "true",
-    "timelimit": "30"
-})
-print(f"用户选择: {response.json().get('choice')}")
 ```
-
-#### 使用POST请求（推荐）
-
-```python
-import requests
-import json
-
-# 默认通知
-response = requests.post(
-    "http://127.0.0.2:8848/notify",
-    json={
-        "title": "测试通知",
-        "context": "这是一个测试通知内容",
-        "level": "default",
-        "type": "default",
-        "timelimit": 5
-    }
-)
-
-# 交互式通知（等待用户选择）
-response = requests.post(
-    "http://127.0.0.2:8848/notify",
-    json={
-        "title": "请确认",
-        "context": "您确定要执行此操作吗？",
-        "level": "warn",
-        "type": "interaction",
-        "choice": ["确认", "取消", "稍后提醒"],
-        "wait": True,
-        "timelimit": 30
-    }
-)
-
-result = response.json()
-if result["status"] == "success":
-    if "choice" in result:
-        print(f"用户选择了: {result['choice']}")
-    else:
-        print("通知已发送")
-elif result["status"] == "timeout":
-    print("用户未在时间内做出选择")
-```
-
-### 命令行示例
-
-#### curl GET请求
-
-```bash
-# 默认通知
-curl "http://127.0.0.2:8848/notify?title=测试&context=这是一个测试&level=default&type=default&timelimit=5"
-
-# 交互式通知
-curl "http://127.0.0.2:8848/notify?title=请选择&context=请选择选项&level=default&type=interaction&choice=是+否"
-
-# 交互式通知（等待选择）
-curl "http://127.0.0.2:8848/notify?title=请选择&context=请选择选项&level=default&type=interaction&choice=是+否&wait=true&timelimit=30"
-```
-
-#### curl POST请求
-
-```bash
-# 默认通知
-curl -X POST http://127.0.0.2:8848/notify \
-  -H "Content-Type: application/json" \
-  -d '{"title":"测试","context":"这是一个测试","level":"default","type":"default","timelimit":5}'
-
-# 交互式通知（等待选择）
-curl -X POST http://127.0.0.2:8848/notify \
-  -H "Content-Type: application/json" \
-  -d '{"title":"请确认","context":"您确定要执行此操作吗？","level":"warn","type":"interaction","choice":["确认","取消"],"wait":true,"timelimit":30}'
+DISCONNECTED → CONNECTING → AUTHENTICATING → CONNECTED
+                                                    │
+                     ┌──────────────────────────────┤
+                     ▼                              ▼
+               RECONNECTING ← ─ ─ ─ ─ 连接断开
+                     │
+                     ▼
+               CONNECTING → ... (重试循环)
+                     │
+               CONNECTED（恢复）
+                     │
+               CLOSED（主动停止或达最大重连次数）
 ```
 
 ## 通知样式
 
-通知系统根据不同的等级显示不同的样式：
+- **default**: 蓝色背景（`#94BFFF`）
+- **warn**: 黄色背景（`#FFC53D`）
+- **error**: 红色背景（`#FF643D`）
 
-- **default**: 蓝色背景，表示普通通知
-- **warn**: 黄色背景，表示警告通知
-- **error**: 红色背景，表示错误通知
+交互式通知会显示选项按钮，点击后通知关闭并回传结果。
 
-特别地，当通知类型为`interaction`时，通知会显示交互按钮。用户点击按钮后，通知会关闭，并返回用户的选择（如果启用了等待功能）。
+## 使用示例
 
-## 错误码
-
-- `400 Bad Request`: 参数缺失或无效
-- `404 Not Found`: 请求的路径不存在
-- `411 Length Required`: POST请求缺少Content-Length头
-- `500 Internal Server Error`: 服务器内部错误
-
-## 系统架构
-
-### 组件说明
-
-1. **NotificationRequestHandler**: HTTP请求处理器，处理GET/POST请求
-2. **NotificationServer**: 通知服务器，管理HTTP服务器线程
-3. **NotificationWindow**: 通知窗口，负责UI显示和用户交互
-4. **NotificationManager**: 通知管理器，协调服务器和UI，集成到线程管理器
-
-### 线程管理
-
-通知系统使用线程管理器进行生命周期管理：
+### Python 客户端示例（发送通知）
 
 ```python
-# 在dock.py中的集成
-from Lib.features.notification_system import NotificationManager
+import asyncio
+import json
+import websockets
+
+async def send_notification():
+    async with websockets.connect("ws://127.0.0.2:8848") as ws:
+        # 认证
+        await ws.send(json.dumps({
+            "type": "auth", "token": "", "client_id": "my_app"
+        }))
+        auth_resp = json.loads(await ws.recv())
+        assert auth_resp["status"] == "success"
+
+        # 订阅
+        await ws.send(json.dumps({
+            "type": "subscribe", "topics": ["notification"]
+        }))
+        sub_resp = json.loads(await ws.recv())
+        assert sub_resp["status"] == "success"
+
+        # 推送普通通知
+        await ws.send(json.dumps({
+            "type": "notification",
+            "data": {
+                "title": "测试通知",
+                "context": "这是一个测试通知",
+                "level": "default",
+                "type": "default",
+                "timeout": 5
+            }
+        }))
+        result = json.loads(await ws.recv())
+        print(f"发送结果: {result}")
+
+asyncio.run(send_notification())
+```
+
+### 交互式通知示例（等待用户选择）
+
+```python
+import asyncio
+import json
+import uuid
+import websockets
+
+connected_clients = {}
+
+async def notify_handler(ws):
+    """服务端处理函数示例"""
+    async for raw in ws:
+        data = json.loads(raw)
+        if data["type"] == "auth":
+            await ws.send(json.dumps({
+                "type": "auth_result", "status": "success"
+            }))
+        elif data["type"] == "subscribe":
+            await ws.send(json.dumps({
+                "type": "subscribe_result",
+                "status": "success",
+                "topics": data.get("topics", [])
+            }))
+            connected_clients[id(ws)] = ws
+        elif data["type"] == "interaction_response":
+            print(f"用户选择: {data['choice']} (交互ID: {data['interaction_id']})")
+
+async def push_interaction():
+    """向客户端推送交互式通知"""
+    interaction_id = str(uuid.uuid4())
+    for ws in connected_clients.values():
+        await ws.send(json.dumps({
+            "type": "notification",
+            "data": {
+                "title": "请确认",
+                "context": "您确定要执行此操作吗？",
+                "level": "warn",
+                "type": "interaction",
+                "choices": ["确认", "取消"]
+            },
+            "interaction_id": interaction_id
+        }))
+
+asyncio.run(push_interaction())
+```
+
+## 线程管理
+
+通知系统通过 `NotificationManager(QThread)` 集成到线程管理器中：
+
+```python
+from core.notification_system import NotificationManager
+
 self.notification_manager = NotificationManager(parent=self)
 notification_system_id = self.thread_manager.create(
     name=self.notification_manager.get_name(),
@@ -259,46 +299,44 @@ notification_system_id = self.thread_manager.create(
 )
 ```
 
-### 等待机制
+### 可用信号
 
-当启用`wait=true`参数时，交互式通知会使用线程同步机制等待用户选择：
-
-1. 服务器创建`threading.Event`对象
-2. 显示通知窗口
-3. 用户点击按钮时，设置选择结果并触发事件
-4. 服务器线程等待事件触发或超时
-5. 返回用户选择或超时结果
-
-## 高级功能
-
-### 超时控制
-
-- 默认超时时间：5秒
-- 最大超时时间：60秒
-- 交互式通知等待超时：使用`timelimit`参数指定
-
-### 图标支持
-
-可以通过`icon`参数指定通知图标路径，支持本地文件路径。
-
-### 批量通知
-
-可以同时发送多个通知，系统会按顺序显示。
+| 信号 | 类型 | 说明 |
+|------|------|------|
+| `show_notification_signal` | `Signal(dict)` | 通知数据到达时发射 |
+| `errorOccurred` | `Signal(str)` | 错误发生时发射 |
+| `connectionStateChanged` | `Signal(str)` | 连接状态变更时发射 |
 
 ## 测试
 
-项目包含一个测试脚本 `test_notification.py`，可以用于测试通知系统的各项功能。
+测试套件位于 `tests/test_notification_system.py`，使用内置的 WebSocket 测试服务器模拟外部服务器：
 
 ```bash
-python test_notification.py
+cd 项目根目录
+python -m tests.test_notification_system
 ```
 
-## 与线程管理器的集成
+测试覆盖场景（12 个用例）：
 
-通知系统已完全集成到线程管理器中，支持以下功能：
+| 编号 | 场景 | 说明 |
+|------|------|------|
+| TC01 | 完整连接流程 | 建连 → 认证 → 订阅 → CONNECTED |
+| TC02 | 标准通知接收 | 服务器推送通知，客户端正确解析 |
+| TC03 | 无效 JSON 容错 | 非法 JSON 不崩溃，后续消息正常 |
+| TC04 | 不完整通知忽略 | 缺少 title/context 的通知被静默丢弃 |
+| TC05 | 交互响应回传 | interaction_id 传递与用户选择回传 |
+| TC06 | 断线自动重连 | 连接断开后自动恢复 |
+| TC07 | 高并发消息 | 30 条并发消息全部正确接收 |
+| TC08 | 心跳保活 | ping/pong 正常发送 |
+| TC09 | 服务端错误回调 | error 消息触发 on_error |
+| TC10 | 未知消息类型 | 不引起异常，后续正常接收 |
+| TC11 | 主动停止 | stop() 后状态变为 CLOSED |
+| TC12 | 多次重连 | 连续 3 次断线重连后仍正常 |
 
-- **线程状态管理**: 可以通过线程管理器监控通知系统的状态
-- **暂停/恢复**: 支持通过线程管理器暂停和恢复通知服务
-- **统一生命周期管理**: 与dock.py中其他线程统一管理
+## 错误处理
 
-具体使用方法请参考[线程管理器文档](thread_manager.md)。
+- **认证失败**: 客户端断开，记录错误，按重连策略重试
+- **连接断开**: 触发指数退避重连（1.5 倍递增，最长 30 秒间隔）
+- **无效消息**: 静默丢弃，不影响后续消息处理
+- **服务端错误**: 通过 `errorOccurred` 信号上报
+- **依赖要求**: `websockets>=13.0`

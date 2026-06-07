@@ -45,17 +45,17 @@ class DockConstants:
     SEPARATOR_WIDTH = 2
     PROCESS_CHECK_INTERVAL = 1400  # 进程检查间隔（毫秒）
     
-    # 颜色常量
-    COLOR_BACKGROUND = "#ECECEC"
-    COLOR_HOVER = "#e9e1d4"
-    COLOR_BORDER_ACTIVE = "#52d1ff"
-    COLOR_BORDER_INACTIVE = "#555555"
-    COLOR_BG_ACTIVE = "#008566"
-    COLOR_BG_HOVER_ACTIVE = "#00e6eb"
-    COLOR_BG_HOVER_INACTIVE = "#65E2D2"
-    COLOR_SEPARATOR = "#888888"
-    COLOR_WINDOW_BORDER = "#000000"
-    COLOR_TOOLTIP= "#008566"
+    # 颜色常量（基于UI配色方案）
+    COLOR_BACKGROUND = "#F8F9FA"      # Surface - 卡片、输入框背景
+    COLOR_HOVER = "#80E0D7"           # Primary Light - 悬停状态
+    COLOR_BORDER_ACTIVE = "#39C5BB"   # Primary - 主色
+    COLOR_BORDER_INACTIVE = "#ADB5BD" # Text Disabled - 禁用/非活跃边框
+    COLOR_BG_ACTIVE = "#39C5BB"       # Primary - 运行中背景
+    COLOR_BG_HOVER_ACTIVE = "#80E0D7" # Primary Light - 运行中悬停
+    COLOR_BG_HOVER_INACTIVE = "#80E0D7" # Primary Light - 非活跃悬停
+    COLOR_SEPARATOR = "#ADB5BD"       # Text Disabled - 分隔符
+    COLOR_WINDOW_BORDER = "#212529"   # Text Primary - 窗口边框
+    COLOR_TOOLTIP = "#39C5BB"         # Primary - 工具提示
     
     # 样式表模板
     BUTTON_STYLE_RUNNING = f"""
@@ -119,6 +119,7 @@ class DockApp(QMainWindow):
         super().__init__()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.settings_file = os.path.join(self.script_dir, "settings.json")
+        self.all_settings = None
         
         # 应用数据存储
         self.running_apps: Dict[str, str] = {}
@@ -155,12 +156,6 @@ class DockApp(QMainWindow):
         
         # 使用统一的线程管理器启动所有后台服务
         self.thread_manager = manager.ThreadManager()
-
-        if "100861" not in os.popen("echo 100861").read():
-            log.warning("cmd被禁用")
-            self.is_cmd_disabled = True
-        else:
-            self.is_cmd_disabled = False
 
         try:
             self.notification_manager = notification_system.NotificationManager(parent=self)
@@ -396,29 +391,34 @@ class DockApp(QMainWindow):
             log.error(f"adjust_window_stacking error: {e}")
     
     def hide_dock(self):
-        """将 dock栏隐藏到屏幕下边缘（带动画）"""
+        """将 dock栏置底（隐藏到其他窗口下方）"""
         if self._is_hidden or self.hwnd is None:
             return
         try:
-            sys32.hide_window(self.hwnd)
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+            self.show()
+            self.lower()
             self._is_hidden = True
-            log.info("dock栏隐藏")
+            log.info("dock栏已置底")
         except Exception as e:
-            log.error(f"隐藏dock栏时出错: {e}")
+            log.error(f"置底dock栏时出错: {e}")
         
     
     def show_dock(self):
-        """将 dock栏从屏幕下边缘显示（带动画）"""
+        """将 dock栏从置底恢复为置顶显示"""
         if not self._is_hidden or self.hwnd is None:
             return
         try:
-            sys32.show_window(self.hwnd)
+            self.setWindowFlag(Qt.WindowStaysOnTopHint)
+            self.show()
+            self.raise_()
+            self.activateWindow()
             self._is_hidden = False
             self.update_app_buttons()
             self.update_window_position()
-            log.info("dock栏显示")
+            log.info("dock栏已恢复置顶")
         except Exception as e:
-            log.error(f"显示dock栏时出错: {e}")
+            log.error(f"恢复dock栏置顶时出错: {e}")
 
 
     def handle_app_click(self, app_data):
@@ -1081,13 +1081,25 @@ class DockApp(QMainWindow):
         else:
             log.disable_debug()
 
+        if config_data.get('nocmd_mode', False):
+            log.warning("cmd被禁用")
+            self.is_cmd_disabled = True
+        else:
+            self.is_cmd_disabled = False
+
         log.info("设置已更新")
 
     def load_settings(self):
         try:
-            settings = Config.load_config(self.settings_file)
+            self.all_settings = Config.load_config(self.settings_file)
+            if self.all_settings.get('nocmd_mode', False):
+                log.warning("cmd被禁用")
+                self.is_cmd_disabled = True
+            else:
+                self.is_cmd_disabled = False
+        
             # 从 dock栏配置部分获取数据
-            dock_config = settings.get('dock', {})
+            dock_config = self.all_settings.get('dock', {})
             self.apps = dock_config.get('apps', [])
             
             # 加载 ProcessManager 的排除进程设置（如存在）
@@ -1102,21 +1114,20 @@ class DockApp(QMainWindow):
             
             # 确保加载设置后更新应用按钮
             self.update_app_buttons()
-            if dock_config.get('hide_taskbar', False):
-                sys32.show_window(sys32.HWND_TRAY)
         except Exception as e:
-            log.exception(f"加载配置文件 {self.settings_file} 时出错")
+            log.error(f"加载配置文件 {self.settings_file} 时出错")
             self.apps = []  # 出错时使用默认设置
             self.update_app_buttons()
 
     def save_settings(self):
         try:
-            config = Config.load_config(self.settings_file)
+            self.all_settings = Config.load_config(self.settings_file)
+            config = self.all_settings
             config['dock']['apps'] = self.apps
             config['dock']['except_processes'] = getattr(self.process_manager, 'except_processes', [])
             Config.save_config(self.settings_file, config)
         except Exception as e:
-            log.exception(f"保存配置文件 {self.settings_file} 时出错")
+            self.handle_error(f"保存配置文件 {self.settings_file} 时出错")
 
     def show_menu(self, pos):
         """显示菜单按钮的菜单"""
