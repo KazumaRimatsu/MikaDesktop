@@ -115,7 +115,10 @@ class DockConstants:
 class DockApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            self.script_dir = os.path.dirname(sys.executable)
+        else:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.settings_file = os.path.join(self.script_dir, "settings.json")
         self.all_settings = None
         

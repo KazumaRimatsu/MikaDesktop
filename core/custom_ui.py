@@ -1,10 +1,9 @@
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtCore import Qt, QTimer, QRect, QEvent, QPoint
-from PySide6.QtGui import QCursor, QFontDatabase
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QDialog, QLabel)
 import BlurWindow.blurWindow as blurWindow
 import core.log_maker as log_maker
-import os
 
 # 添加Windows API导入，用于输入法切换
 import win32con

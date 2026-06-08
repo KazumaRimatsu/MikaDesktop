@@ -233,7 +233,7 @@ class SettingsUI(QDialog):
             )
             if enable:
                 exe_path = sys.executable
-                if not self.is_nuitka:
+                if not self.is_nuitka and not getattr(sys, 'frozen', False):
                     script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dock.py")
                     if os.path.exists(script_path):
                         value = f'"{exe_path}" "{script_path}"'

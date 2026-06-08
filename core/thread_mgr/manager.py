@@ -1,7 +1,7 @@
 from PySide6.QtCore import QThread, QObject, Signal
 import uuid
 import threading
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional
 from datetime import datetime
 
 class ThreadState:

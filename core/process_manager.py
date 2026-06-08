@@ -5,7 +5,6 @@ import win32con
 import os
 import sys
 import hashlib
-import win32api
 
 import core.sys32 as sys32
 from . import make_app_icon
