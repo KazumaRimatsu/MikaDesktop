@@ -5,4 +5,4 @@ from . import log_maker
 from . import config_manager
 from . import APIs
 from . import make_app_icon
-from . import threads
+from . import thread_mgr

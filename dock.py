@@ -9,10 +9,10 @@ import psutil
 import win32con
 import win32gui
 import win32process
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QThread, Qt, QSize, QTimer, QRect, QEvent, QPoint
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QRect, QEvent, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
-                               QDialog, QLabel, QInputDialog, QPlainTextEdit)
+                               QDialog, QLabel, QInputDialog)
 # 添加获取任务栏固定程序所需的库
 from win32com.shell import shell  # type: ignore
 from core.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
@@ -21,9 +21,8 @@ import core.sys32 as sys32
 import core.log_maker as log_maker
 import core.config_manager as Config
 import core.settings as settings
-import features.process_mgr as process_mgr
 
-from core.threads import manager
+from core.thread_mgr import manager
 
 VERSION = "0.0.0"
 
@@ -1159,6 +1158,7 @@ class DockApp(QMainWindow):
     def open_task_manager(self):
         """打开任务管理器"""
         try:
+            import features.process_mgr as process_mgr
             if self.is_cmd_disabled:
                 self.process_mgr = process_mgr.ProcessCollectorWorker()
                 process_mgr_id = self.thread_manager.create(name=self.process_mgr.get_name(), start_when_create=True, worker=self.process_mgr)
