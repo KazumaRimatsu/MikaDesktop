@@ -22,15 +22,6 @@ DEFAULT_CONFIG = {
     ]
   },
   "nocmd_mode": False,
-  "notify": {
-    "default_timeout": 0,
-    "ws_url": "ws://127.0.0.1:8848",
-    "auth_token": "",
-    "client_id": "dock",
-    "reconnect_delay": 3,
-    "reconnect_max_retries": 0,
-    "topics": ["notification"]
-  },
   "debug": False
 }
 

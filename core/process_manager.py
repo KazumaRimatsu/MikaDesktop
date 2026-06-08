@@ -7,7 +7,7 @@ import sys
 import hashlib
 import win32api
 
-import core.skills.sys32 as sys32
+import core.sys32 as sys32
 from . import make_app_icon
 from . import log_maker
 
@@ -122,8 +122,13 @@ class ProcessManager:
             log.error(f"检查窗口时出错: {e}")
             return False
 
-    def get_running_processes(self, known_apps_paths):
-        """获取系统中所有正在运行的进程，找出未添加但运行的应用"""
+    def get_running_processes(self, known_apps_paths, skip_known: bool = True):
+        """获取系统中所有正在运行的进程，找出未添加但运行的应用
+        
+        Args:
+            known_apps_paths: 已知应用路径列表
+            skip_known: True=跳过已知应用(默认), False=包含已知应用用于状态检查
+        """
         running_processes = {}
         try:
             # 先一次性枚举所有可见窗口，建立 pid -> visible-window-info 映射（提升性能）
@@ -177,7 +182,7 @@ class ProcessManager:
                         continue
 
                     # 检查是否已知（固定或用户添加）
-                    if self._norm_path(exe_path) in normalized_known_paths:
+                    if skip_known and self._norm_path(exe_path) in normalized_known_paths:
                         continue
 
                     if exe_path not in running_processes:

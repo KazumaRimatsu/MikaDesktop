@@ -4,7 +4,7 @@ import winreg
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QGroupBox, QHBoxLayout,
     QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QSpacerItem, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget, QSpinBox)
+    QVBoxLayout, QWidget)
 import datetime
 import requests
 import core.config_manager as Config
@@ -92,35 +92,7 @@ class SettingsUI(QDialog):
 
         self.tabWidget.addTab(self.dock, "")
 
-        self.notify = QWidget()
-        self.notify_layout = QVBoxLayout(self.notify)
 
-        self.notify_group = QGroupBox(self.notify)
-        self.notify_group_layout = QVBoxLayout(self.notify_group)
-
-        self.notify_timeout_label = QLabel(self.notify_group)
-        self.notify_group_layout.addWidget(self.notify_timeout_label)
-
-        self.notify_timeout_spin = QSpinBox(self.notify_group)
-        self.notify_timeout_spin.setRange(0, 60)
-        self.notify_timeout_spin.setSuffix(u" 秒")
-        self.notify_timeout_spin.setSpecialValueText(u"不限时")
-        self.notify_group_layout.addWidget(self.notify_timeout_spin)
-
-        self.notify_group_layout.addItem(
-            QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        )
-
-        self.notify_desc_label = QLabel(self.notify_group)
-        self.notify_desc_label.setWordWrap(True)
-        self.notify_group_layout.addWidget(self.notify_desc_label)
-
-        self.notify_layout.addWidget(self.notify_group)
-
-        self.notify_verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
-        self.notify_layout.addItem(self.notify_verticalSpacer)
-
-        self.tabWidget.addTab(self.notify, "")
 
         self.about = QWidget()
         self.verticalLayout_4 = QVBoxLayout(self.about)
@@ -204,10 +176,6 @@ class SettingsUI(QDialog):
         self.except_apps.setTitle(u"排除的应用")
         self.except_apps_tips_label.setText(u"键入进程名（每行一个，无需.exe后缀）")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.dock), u"Dock")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.notify), u"通知")
-        self.notify_group.setTitle(u"通知选项")
-        self.notify_timeout_label.setText(u"默认通知超时时间：")
-        self.notify_desc_label.setText(u"通知使用 WebSocket 服务器在 ws://127.0.0.1:8848 监听。\n发送 JSON 消息，支持 title、context、level、type、timelimit 等字段。\n交互式通知通过 choice 数组传递选项，最多 4 个。")
         self.about_text.setText(ABOUT_TEXT)
         self.check_upd_button.setText(u"检查更新")
         self.check_upd_button.clicked.connect(self.check_update)
@@ -236,10 +204,6 @@ class SettingsUI(QDialog):
 
         except_list = dock_config.get('except_processes', [])
         self.plainTextEdit.setPlainText('\n'.join(except_list))
-
-        notify_config = self.config_data.get('notify', {})
-        timeout = notify_config.get('default_timeout', 0)
-        self.notify_timeout_spin.setValue(timeout)
 
         self.check_autostart_status()
 
@@ -295,12 +259,9 @@ class SettingsUI(QDialog):
             line.strip() for line in self.plainTextEdit.toPlainText().split('\n') if line.strip()
         ]
 
-        notify_config = self.config_data.get('notify', {})
-        notify_config['default_timeout'] = self.notify_timeout_spin.value()
         self.config_data['nocmd_mode'] = self.nocmd_mode.isChecked()
         self.config_data['debug'] = self.enable_debug.isChecked()
         self.config_data['dock'] = dock_config
-        self.config_data['notify'] = notify_config
 
     def save_settings(self):
         try:
@@ -384,10 +345,10 @@ class SettingsUI(QDialog):
     def apply_blur_effect(self):
         """应用窗口模糊效果"""
         try:
-			# 使用GlobalBlur函数为窗口添加模糊效果
+            # 使用GlobalBlur函数为窗口添加模糊效果
             blurWindow.blur(self.winId(), hexColor=False, Dark=True)
-        except Exception as e:  
-            pass  # 静默失败，不影响对话框功能
+        except Exception as e:
+            log.warning(f"设置窗口模糊失败: {e}")
 
 
 

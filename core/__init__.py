@@ -6,5 +6,3 @@ from . import config_manager
 from . import APIs
 from . import make_app_icon
 from . import threads
-from . import skills
-from . import notification_system

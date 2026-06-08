@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 import warnings
 
+from . import log_maker
+
+log = log_maker.logger()
+
 # 类型提示
 try:
     from typing import Literal
@@ -501,6 +505,7 @@ class WindowsIconExtractor:
             )
             
         except Exception as e:
+            log.warning(f"图标提取失败 [{file_path}]: {e}")
             return ExtractedIcon(
                 image=None,
                 raw_data=b'',

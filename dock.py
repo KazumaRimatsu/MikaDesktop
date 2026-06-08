@@ -17,10 +17,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
 from win32com.shell import shell  # type: ignore
 from core.custom_ui import IconHoverFilter, ContextPopup, ShutdownDialog
 from core.process_manager import ProcessManager
-import core.skills.sys32 as sys32
+import core.sys32 as sys32
 import core.log_maker as log_maker
 import core.config_manager as Config
-import core.notification_system as notification_system
 import core.settings as settings
 import features.process_mgr as process_mgr
 
@@ -137,8 +136,6 @@ class DockApp(QMainWindow):
         self.process_manager = ProcessManager()
         self.geometry_anim = None
         
-        # 通知系统
-        self.notification_manager = None
         self._is_hidden = False
         self.hwnd = None
         
@@ -156,13 +153,6 @@ class DockApp(QMainWindow):
         
         # 使用统一的线程管理器启动所有后台服务
         self.thread_manager = manager.ThreadManager()
-
-        try:
-            self.notification_manager = notification_system.NotificationManager(parent=self)
-            notification_system_id = self.thread_manager.create(name = self.notification_manager.get_name(), start_when_create=True, worker=self.notification_manager)
-            log.info(f"通知系统已开启，id为{notification_system_id}")
-        except Exception as e:
-            log.error(f"创建通知系统线程时出错: {e}")
 
         self.destroyed.connect(self.exit_app)
 
@@ -343,19 +333,26 @@ class DockApp(QMainWindow):
         """检查所有应用的运行状态"""
         try:
             current_running = {}
+            all_apps = self.pinned_apps + self.apps
+            all_apps_paths = [app['path'] for app in all_apps]
             
-            for app in self.pinned_apps:
-                if self.process_manager.is_process_running(app['path']):
-                    current_running[app['name']] = app['path']
-        
-            for app in self.apps:
-                if self.process_manager.is_process_running(app['path']):
-                    current_running[app['name']] = app['path']
-        
-            all_apps_paths = [app['path'] for app in self.pinned_apps + self.apps]
-            running_processes = self.process_manager.get_running_processes(all_apps_paths)
-            self.running_apps_list = list(running_processes.values())
+            # 一次性获取所有运行中进程（避免重复 EnumWindows）
+            # skip_known=False 确保已知应用也被检查运行状态
+            all_running = self.process_manager.get_running_processes(all_apps_paths, skip_known=False)
+            # running_apps_list 只保留未知应用（非 pinned + 非手动添加）
+            normalized_known_paths = {self.process_manager._norm_path(app['path']) for app in all_apps}
+            self.running_apps_list = [
+                info for path, info in all_running.items()
+                if self.process_manager._norm_path(path) not in normalized_known_paths
+            ]
             
+            # 批量检查已知应用状态
+            normalized_running = {self.process_manager._norm_path(p): p for p in all_running}
+            for app in all_apps:
+                if self.process_manager._norm_path(app['path']) in normalized_running:
+                    current_running[app['name']] = app['path']
+            
+            # 更新按钮状态
             for app_name in set(list(self.running_apps.keys()) + list(current_running.keys())):
                 if (app_name in self.running_apps) != (app_name in current_running):
                     button = self.get_app_button(app_name)
@@ -1061,7 +1058,7 @@ class DockApp(QMainWindow):
         self.dialog = settings.SettingsUI(
             version=VERSION,
             config_path=self.settings_file,
-            on_save_callback=self.on_settings_saved
+            on_save_callback=self.on_settings_saved,
         )
         self.dialog.show()
 

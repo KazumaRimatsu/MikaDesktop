@@ -114,7 +114,7 @@ class ContextPopup(QWidget):
 				def handler():
 					try:
 						self.close()
-					except:
+					except Exception:
 						pass
 					if cb:
 						QTimer.singleShot(0, cb)
@@ -143,7 +143,7 @@ class ContextPopup(QWidget):
 			# 使用GlobalBlur函数为窗口添加模糊效果
 			blurWindow.blur(self.winId(), hexColor=False, Dark=False)
 		except Exception as e:
-			pass  # 静默失败，不影响菜单功能
+			log.warning(f"blur effect failed (non-fatal): {e}")
 
 	# 重写显示位置方法：始终优先在图标上方显示菜单，并确保显示所有选项
 	def show_at_position(self, pos, sender):
@@ -343,7 +343,7 @@ class ShutdownDialog(QDialog):
 			# 使用GlobalBlur函数为窗口添加模糊效果
 			blurWindow.blur(self.winId(), hexColor=False, Dark=False)
 		except Exception as e:
-			pass  # 静默失败，不影响对话框功能
+			log.warning(f"shutdown blur failed: {e}")
 
 	def select_action(self, action):
 		"""选择操作并立即关闭对话框"""
