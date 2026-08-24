@@ -18,7 +18,12 @@ ABOUT_TEXT = f"&&PROJNAME&&\n版本 &&VERSION&&\n\n&&PROJNAME&& 是开源软件�
 PROJ_NAME = "MikaDesktop"
 
 LICENSE = "BSD 3-Clause License"
-CONTRIBUTION = f"有许多人为 {PROJ_NAME} 做出了贡献，访问 {PROJ_NAME} 的 GitHub 仓库以获取更多信息。"
+CONTRIBUTION = f"""有许多人为 {PROJ_NAME} 做出了贡献，访问 {PROJ_NAME} 的 GitHub 仓库以获取更多信息。
+
+同时衷心感谢以下项目，没有他们，米卡桌面或许只是一群虫子（？）：
+Yohaku 余白
+https://github.com/DavidF-Dev/Yohaku
+我们借鉴了这个项目的AppBar窗口注册相关写法"""
 
 NO_UPD_TEXT = f"已为最新版本。"
 NEW_UPD_TEXT = f"存在新版本"
@@ -307,35 +312,35 @@ class SettingsUI(QDialog):
             release_req = requests.get(RELEASE_CHECK_UPD_URL)
             if release_req.status_code != 200:
                 self.upd_status(f"检查更新失败", "error")
-                self.upd_about_text(upd_text=f"{ERROR_UPD_TEXT}{release_req.status_code}", contribution=False)
+                self.upd_about_text(upd_text=f"{ERROR_UPD_TEXT}{release_req.status_code}")
                 return
             release_data = list(release_req.text)
             if len(release_data) == 0:
                 self.upd_status(f"没有Releases", "warning")
-                self.upd_about_text(upd_text=NO_UPD_TEXT, contribution=False)
+                self.upd_about_text(upd_text=NO_UPD_TEXT)
                 return
         else:
             self.upd_status("非编译环境，检查最近推送")
             latest_req = requests.get(LATEST_CHECK_UPD_URL)
             if latest_req.status_code != 200:
                 self.upd_status(f"检查更新失败", "error")
-                self.upd_about_text(upd_text=f"{ERROR_UPD_TEXT}{latest_req.status_code}", contribution=False)
+                self.upd_about_text(upd_text=f"{ERROR_UPD_TEXT}{latest_req.status_code}")
                 return
             latest_data = latest_req.json()
             if len(latest_data) == 0:
                 self.upd_status(f"没有latest Builds", "warning")
-                self.upd_about_text(upd_text=NO_UPD_TEXT, contribution=False)
+                self.upd_about_text(upd_text=NO_UPD_TEXT)
                 return
             if datetime.datetime.strptime(latest_data[0]["timestamp"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp() > datetime.datetime.timestamp(datetime.datetime.now()):
                 self.upd_status(f"存在新版本", "success")
-                self.upd_about_text(upd_text=NEW_UPD_TEXT, contribution=False)
+                self.upd_about_text(upd_text=NEW_UPD_TEXT)
                 return
             else:
                 self.upd_status(f"暂无新版本", "success")
-                self.upd_about_text(upd_text=NO_UPD_TEXT, contribution=False)
+                self.upd_about_text(upd_text=NO_UPD_TEXT)
                 return
 
-    def upd_about_text(self, upd_text: str = "", contribution: bool = False):
+    def upd_about_text(self, upd_text: str = "", contribution: bool = True):
         self.about_text.setText(ABOUT_TEXT.replace("&&VERSION&&", self.version)
             .replace("&&PROJNAME&&", PROJ_NAME)
             .replace("&&LICENSE&&", LICENSE)

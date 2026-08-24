@@ -2,6 +2,7 @@ import gc
 import os
 import sys
 import hashlib
+import atexit
 from typing import Dict, List, Any
 import subprocess
 
@@ -41,7 +42,7 @@ class DockConstants:
     BUTTON_SPACING = 10
     WINDOW_MARGIN = 0
     SEPARATOR_WIDTH = 2
-    PROCESS_CHECK_INTERVAL = 1400  # 进程检查间隔（毫秒）
+    PROCESS_CHECK_INTERVAL = 500   # 进程检查间隔（毫秒）
     
     # 颜色常量（基于UI配色方案）
     COLOR_BACKGROUND = "#F8F9FA"      # Surface - 卡片、输入框背景
@@ -138,7 +139,7 @@ class DockApp(QMainWindow):
         self.process_manager = ProcessManager()
         self.geometry_anim = None
         
-        self._is_hidden = False
+        self._hidden_by_fullscreen = False
         self.hwnd = None
         
         # 图标版本管理
@@ -152,7 +153,15 @@ class DockApp(QMainWindow):
         self.setup_process_monitoring()
         # Position the window at center horizontally and 20 pixels from bottom
         self.update_window_position()
-        
+        # 将程序栏注册为底部 AppBar，系统自动调整工作区使最大化窗口避开 dock
+        # 注册前保存原始工作区底部（Qt 逻辑坐标），供 update_window_position 定位
+        self._original_work_area_bottom = QApplication.primaryScreen().availableGeometry().bottom()
+        # Qt 坐标是逻辑像素，AppBar 需要物理像素（系统 DPI aware 坐标系）
+        dpr = QApplication.primaryScreen().devicePixelRatio()
+        dock_top_phys = round(self.geometry().y() * dpr)
+        sys32.set_appbar_bottom(dock_top_phys)
+        # 注册 atexit 兜底，确保任何退出方式都能恢复工作区
+        atexit.register(sys32.remove_appbar)
         # 使用统一的线程管理器启动所有后台服务
         self.thread_manager = manager.ThreadManager()
 
@@ -326,10 +335,42 @@ class DockApp(QMainWindow):
             return None
 
     def setup_process_monitoring(self):
-        """设置定时器来监控进程状态"""
+        """设置定时器监控进程状态，并注册 WinEventHook 实现全屏变化即时响应"""
         self.process_timer = QTimer()
         self.process_timer.timeout.connect(self.check_running_processes)
         self.process_timer.start(DockConstants.PROCESS_CHECK_INTERVAL)
+
+        # WinEventHook：前台窗口变化时置位标志，下次定时器触发时立即检测
+        self._fullscreen_state_changed = False
+        self._setup_fullscreen_monitor()
+
+    def _setup_fullscreen_monitor(self):
+        """注册 WinEventHook 监听前台窗口变化事件，即时触发全屏状态检测"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            # EVENT_SYSTEM_FOREGROUND = 3
+            def _win_event_proc(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
+                if event == 3 and hwnd:
+                    self._fullscreen_state_changed = True
+
+            WINEVENTPROC = ctypes.WINFUNCTYPE(
+                None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
+                wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD,
+            )
+            self._win_event_callback = WINEVENTPROC(_win_event_proc)
+            # SetWinEventHook(eventMin, eventMax, hmodWinEventProc, pfnWinEventProc, idProcess, idThread, dwFlags)
+            # WINEVENT_OUTOFCONTEXT = 0, WINEVENT_SKIPOWNPROCESS = 2
+            self._win_event_hook = ctypes.windll.user32.SetWinEventHook(
+                3, 3, None, self._win_event_callback, 0, 0, 0x0002,
+            )
+            if self._win_event_hook:
+                log.info("全屏监控 WinEventHook 已注册")
+            else:
+                log.warning("WinEventHook 注册失败，将完全依赖定时器轮询")
+        except Exception as e:
+            log.warning(f"设置 WinEventHook 失败，将完全依赖定时器轮询: {e}")
 
     def check_running_processes(self):
         """检查所有应用的运行状态"""
@@ -355,19 +396,23 @@ class DockApp(QMainWindow):
                     current_running[app['name']] = app['path']
             
             # 更新按钮状态
-            for app_name in set(list(self.running_apps.keys()) + list(current_running.keys())):
-                if (app_name in self.running_apps) != (app_name in current_running):
-                    button = self.get_app_button(app_name)
-                    if button:
-                        is_running = app_name in current_running
-                        self.set_button_style(button, is_running)
-                        log.info(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
+            changed_apps = set(self.running_apps.keys()) ^ set(current_running.keys())
+            for app_name in changed_apps:
+                button = self.get_app_button(app_name)
+                if button:
+                    is_running = app_name in current_running
+                    self.set_button_style(button, is_running)
+                    log.info(f"应用 {app_name} 状态更新: {'运行中' if is_running else '已关闭'}")
             
             self.running_apps = current_running
             self.update_app_buttons()
 
+            # 全屏状态变化时即时响应（WinEventHook 触发），否则按定时器周期检测
             try:
-                self.adjust_window_stacking()
+                if self._fullscreen_state_changed:
+                    self._fullscreen_state_changed = False
+                # 全屏检测已禁用，不再调整窗口层级
+                # self.adjust_window_stacking()
             except Exception as e:
                 log.error(f"调整窗口层级时出错: {e}")
             
@@ -375,49 +420,56 @@ class DockApp(QMainWindow):
             log.error(f"检查运行进程时出错: {e}")
 
     def adjust_window_stacking(self):
-        """根据 dock栏中的应用是否有全屏窗口灵活调整 dock栏的显示/隐藏（带动画）"""
+        """根据全屏窗口检测结果灵活调整 dock 栏的显示/隐藏"""
         try:
+            was_hidden = self._hidden_by_fullscreen
             fullscreen_windows = self.process_manager.get_fullscreen_windows()
-            log.debug(f"全屏窗口检测: 找到 {fullscreen_windows}")
+            log.debug(f"全屏窗口检测: 找到 {len(fullscreen_windows)} 个")
             if len(fullscreen_windows) > 0:
-                log.debug("检测到全屏窗口，隐藏dock栏")
+                if not was_hidden:
+                    log.debug("检测到全屏窗口，隐藏dock栏")
                 self.hide_dock()
             else:
-                log.debug("未检测到全屏窗口，显示dock栏")
+                if was_hidden:
+                    log.debug("全屏窗口已消失，显示dock栏")
                 self.show_dock()
-            
         except Exception as e:
             log.error(f"adjust_window_stacking error: {e}")
     
-    def hide_dock(self):
-        """将 dock栏置底（隐藏到其他窗口下方）"""
-        if self._is_hidden or self.hwnd is None:
-            return
-        try:
-            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
-            self.show()
-            self.lower()
-            self._is_hidden = True
-            log.info("dock栏已置底")
-        except Exception as e:
-            log.error(f"置底dock栏时出错: {e}")
-        
-    
     def show_dock(self):
-        """将 dock栏从置底恢复为置顶显示"""
-        if not self._is_hidden or self.hwnd is None:
+        """将 dock 栏恢复为可见置顶状态。仅在被全屏隐藏时执行。"""
+        if not self._hidden_by_fullscreen or self.hwnd is None:
             return
         try:
-            self.setWindowFlag(Qt.WindowStaysOnTopHint)
-            self.show()
+            self._hidden_by_fullscreen = False
+            sys32.show_window(self.hwnd)
+            sys32.set_window_topmost(self.hwnd)
             self.raise_()
-            self.activateWindow()
-            self._is_hidden = False
             self.update_app_buttons()
-            self.update_window_position()
-            log.info("dock栏已恢复置顶")
+            log.info("dock栏已恢复显示")
         except Exception as e:
-            log.error(f"恢复dock栏置顶时出错: {e}")
+            log.error(f"恢复dock栏显示时出错: {e}")
+
+    def hide_dock(self):
+        """将 dock 栏隐藏（真正的 ShowWindow SW_HIDE）。仅在可见时执行。"""
+        if self._hidden_by_fullscreen or self.hwnd is None:
+            return
+        try:
+            self._hidden_by_fullscreen = True
+            sys32.hide_window(self.hwnd)
+            log.info("dock栏已隐藏")
+        except Exception as e:
+            log.error(f"隐藏dock栏时出错: {e}")
+
+    def _ensure_dock_visible(self):
+        """确保 dock 栏处于可见置顶状态（安全恢复方法）。"""
+        if self.hwnd is None:
+            return
+        if not self.isVisible():
+            self._hidden_by_fullscreen = False
+            sys32.show_window(self.hwnd)
+            sys32.set_window_topmost(self.hwnd)
+            log.info("dock栏已恢复显示（安全恢复）")
 
 
     def handle_app_click(self, app_data):
@@ -659,7 +711,9 @@ class DockApp(QMainWindow):
         # 使用可用几何的宽度进行计算
         x = available_geometry.x() + (available_geometry.width() - window_width) // 2
         # 将窗口放置在可用几何的底部
-        y = available_geometry.bottom() - window_height
+        # 使用保存的原始工作区底部（AppBar 注册后 available_geometry 会变化）
+        work_bottom = getattr(self, '_original_work_area_bottom', 0) or available_geometry.bottom()
+        y = work_bottom - window_height
         
         # 确保 x 不为负
         if x < 0:
@@ -799,12 +853,14 @@ class DockApp(QMainWindow):
         th = self.tooltip.height()
         x = global_center.x() - tw//2
         y = global_center.y() - th - 8
-        # 防止超出屏幕左/右边界（基本处理）
+        # 限制在主屏幕工作区内
         screen_rect = QApplication.primaryScreen().availableGeometry()
         if x < screen_rect.left():
             x = screen_rect.left() + 4
         if x + tw > screen_rect.right():
             x = screen_rect.right() - tw - 4
+        if y < screen_rect.top():
+            y = global_center.y() + 16  # 放到图标下方
         self.tooltip.move(x, y)
 
     def clear_layout(self, layout: QHBoxLayout) -> None:
@@ -1208,6 +1264,8 @@ class DockApp(QMainWindow):
         self.save_settings()
         gc.collect()
         try:
+            # 注销 AppBar，恢复原始工作区
+            sys32.remove_appbar()
 
             # 使用统一的线程管理器停止所有后台服务
             if hasattr(self, 'thread_manager') and self.thread_manager:
@@ -1244,6 +1302,9 @@ class DockApp(QMainWindow):
         super().showEvent(event)
         if self.hwnd is None:
             self.hwnd = int(self.winId())
+        else:
+            # 窗口被系统恢复显示时，确保 Topmost 层级正确
+            self._ensure_dock_visible()
 
 
 def main():
